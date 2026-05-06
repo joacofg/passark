@@ -46,6 +46,7 @@ make frontend-test
 make frontend-lint
 make verify-s01
 make verify-s02
+make verify-s03
 make down
 ```
 
@@ -85,14 +86,16 @@ docker compose logs frontend
 curl http://localhost:8000/api/v1/health
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
+bash scripts/verify-s03.sh
 ```
 
 The intent is to keep startup, auth, and migration failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
 
 - `verify-s01` checks baseline stack health and shell rendering.
 - `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend route availability.
+- `verify-s03` extends the proof to the audited sensitive route, including persisted PostgreSQL audit evidence for success and invalidated-session denial.
 
-If Docker itself is unavailable, both verification scripts fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
+If Docker itself is unavailable, all verification scripts fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
 
 ## Integrated verification workflow
 
@@ -102,15 +105,18 @@ Run the slice proof with the same commands expected by the task contract:
 docker compose config
 docker compose up --build -d
 cd frontend && npm test -- --runInBand
-cd .. && bash scripts/verify-s02.sh
+cd .. && bash scripts/verify-s03.sh
 docker compose down -v
 ```
 
-A healthy auth verification run proves all of the following:
+A healthy security verification run proves all of the following:
 
 1. Compose renders and the three services are healthy.
 2. `/api/v1/health` returns the expected backend payload.
-3. Anonymous access to `/api/v1/protected/whoami` returns the stable 401 auth contract.
+3. Anonymous access to `POST /api/v1/protected/vault-access-probe` returns the stable 401 auth contract.
 4. Login succeeds with the configured bootstrap operator credentials.
-5. The authenticated browser cookie unlocks `/api/v1/protected/whoami`.
-6. The frontend serves the login page and protected operator shell routes used by the flow.
+5. Authenticated access to `POST /api/v1/protected/vault-access-probe` returns the expected operation/status/audit identifiers.
+6. Logging out invalidates the session and the same sensitive route fails closed with the stable machine-readable denial code.
+7. PostgreSQL contains the matching `audit_events` rows for both the allowed and denied attempts, including operation, outcome, reason code, and correlation/request identifiers.
+
+This slice does **not** yet claim browser CSRF defenses, rate limiting, or broader security hardening beyond the audited sensitive-route contract above.

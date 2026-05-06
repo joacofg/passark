@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
 
-.PHONY: init up down ps logs logs-backend logs-frontend logs-postgres verify-s01 config
+.PHONY: init up down ps logs logs-backend logs-frontend logs-postgres verify-s01 verify-s02 verify-s03 config
 
 init:
 	@test -f .env || cp .env.example .env
@@ -34,6 +34,12 @@ config:
 
 verify-s01:
 	bash scripts/verify-s01.sh
+
+verify-s02:
+	bash scripts/verify-s02.sh
+
+verify-s03:
+	bash scripts/verify-s03.sh
 
 backend-migrate:
 	$(COMPOSE) run --rm backend alembic upgrade head

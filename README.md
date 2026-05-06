@@ -43,13 +43,14 @@ make up                # build and start postgres, backend, and frontend
 make ps                # inspect service/container state and health
 make logs              # tail all compose logs
 make logs-postgres     # inspect database startup and readiness
-make logs-backend      # inspect API boot, migrations, or health failures
+make logs-backend      # inspect API boot, migrations, auth, or audit failures
 make logs-frontend     # inspect Next.js boot and runtime issues
 make backend-migrate   # run Alembic migrations inside the backend container
 make frontend-test     # run tracked frontend tests in the frontend container
 make frontend-lint     # run tracked frontend lint in the frontend container
 make verify-s01        # assert compose health plus backend/frontend smoke checks
 make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
+make verify-s03        # prove audited sensitive access plus fail-closed denial and persisted audit rows
 make down              # stop the stack
 ```
 
@@ -97,6 +98,7 @@ docker compose logs postgres
 curl http://localhost:8000/api/v1/health
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
+bash scripts/verify-s03.sh
 ```
 
 `bash scripts/verify-s01.sh` renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend health payload, and confirms the frontend responds with the documented app shell plus backend seam.
@@ -107,6 +109,13 @@ bash scripts/verify-s02.sh
 2. login with the configured bootstrap operator succeeds,
 3. the authenticated cookie reaches the protected backend endpoint successfully, and
 4. the frontend serves the login-first and protected-shell routes used by the operator flow.
+
+`bash scripts/verify-s03.sh` closes the security slice by proving that:
+
+1. anonymous access to `POST /api/v1/protected/vault-access-probe` fails closed with the stable unauthenticated code,
+2. authenticated access to the audited sensitive route succeeds and returns the expected operation/audit payload,
+3. a logged-out or invalidated session is denied with the same machine-readable auth contract while still persisting a denial audit row, and
+4. PostgreSQL contains the matching success and denial `audit_events` rows keyed by correlation/request identifiers so missing persistence cannot look like success.
 
 ## Repository roadmap context
 
