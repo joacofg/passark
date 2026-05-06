@@ -35,6 +35,13 @@ services:
       PASSARK_ENV: ${PASSARK_ENV}
       DATABASE_URL: ${DATABASE_URL}
       BACKEND_PORT: ${BACKEND_PORT}
+      AUTH_BOOTSTRAP_ADMIN_EMAIL: ${AUTH_BOOTSTRAP_ADMIN_EMAIL}
+      AUTH_BOOTSTRAP_ADMIN_PASSWORD: ${AUTH_BOOTSTRAP_ADMIN_PASSWORD}
+      AUTH_SESSION_COOKIE_NAME: ${AUTH_SESSION_COOKIE_NAME}
+      AUTH_SESSION_COOKIE_SECURE: ${AUTH_SESSION_COOKIE_SECURE}
+      AUTH_SESSION_COOKIE_SAMESITE: ${AUTH_SESSION_COOKIE_SAMESITE}
+      AUTH_SESSION_COOKIE_DOMAIN: ${AUTH_SESSION_COOKIE_DOMAIN}
+      AUTH_SESSION_TTL_HOURS: ${AUTH_SESSION_TTL_HOURS}
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,7 +50,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - python -c "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:${BACKEND_PORT:-8000}/health').status == 200 else 1)"
+        - python -c "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1/health').status == 200 else 1)"
       interval: 10s
       timeout: 5s
       retries: 5

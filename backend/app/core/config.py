@@ -14,6 +14,35 @@ class Settings(BaseSettings):
     database_url: str = Field(..., alias="DATABASE_URL")
     api_v1_prefix: str = "/api/v1"
 
+    auth_bootstrap_admin_email: str = Field(
+        default="admin@passark.local",
+        alias="AUTH_BOOTSTRAP_ADMIN_EMAIL",
+    )
+    auth_bootstrap_admin_password: str = Field(
+        default="change-me-now",
+        alias="AUTH_BOOTSTRAP_ADMIN_PASSWORD",
+    )
+    auth_session_cookie_name: str = Field(
+        default="passark_session",
+        alias="AUTH_SESSION_COOKIE_NAME",
+    )
+    auth_session_cookie_secure: bool = Field(
+        default=False,
+        alias="AUTH_SESSION_COOKIE_SECURE",
+    )
+    auth_session_cookie_samesite: str = Field(
+        default="lax",
+        alias="AUTH_SESSION_COOKIE_SAMESITE",
+    )
+    auth_session_cookie_domain: str | None = Field(
+        default=None,
+        alias="AUTH_SESSION_COOKIE_DOMAIN",
+    )
+    auth_session_ttl_hours: int = Field(
+        default=24,
+        alias="AUTH_SESSION_TTL_HOURS",
+    )
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
