@@ -40,3 +40,9 @@ backend-migrate:
 
 backend-test:
 	$(COMPOSE) run --rm backend pytest backend/tests/test_health.py backend/tests/test_config.py
+
+frontend-test:
+	$(COMPOSE) run --rm frontend npm test -- --runInBand
+
+frontend-lint:
+	$(COMPOSE) run --rm frontend npm run lint

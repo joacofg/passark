@@ -59,11 +59,12 @@ services:
       - sh
       - -c
       - |
-        echo "Frontend scaffold will be added in T03."
-        sleep infinity
+        npm install && \
+        npm run dev
     env_file:
       - .env
     environment:
+      PASSARK_ENV: ${PASSARK_ENV}
       FRONTEND_PORT: ${FRONTEND_PORT}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
     depends_on:
@@ -71,6 +72,14 @@ services:
         condition: service_started
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - wget -qO- http://127.0.0.1:${FRONTEND_PORT:-3000} >/dev/null 2>&1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     volumes:
       - ./frontend:/workspace/frontend
 

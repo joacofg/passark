@@ -43,6 +43,11 @@ cleanup() {
 trap cleanup EXIT
 
 if command -v docker >/dev/null 2>&1; then
+  if ! docker info >/dev/null 2>&1; then
+    echo "docker daemon unavailable; start Docker before running compose-backed verification." >&2
+    exit 1
+  fi
+
   if ! docker compose config >/dev/null; then
     echo "docker compose config failed." >&2
     exit 1
