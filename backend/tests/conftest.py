@@ -15,6 +15,9 @@ os.environ.setdefault("AUTH_SESSION_COOKIE_NAME", "passark_session")
 os.environ.setdefault("AUTH_SESSION_COOKIE_SECURE", "false")
 os.environ.setdefault("AUTH_SESSION_COOKIE_SAMESITE", "lax")
 os.environ.setdefault("AUTH_SESSION_TTL_HOURS", "24")
+os.environ.setdefault("SECURITY_SENSITIVE_AUDIT_FAILURE_CODE", "audit_unavailable")
+os.environ.setdefault("SECURITY_SENSITIVE_DENIED_CODE", "sensitive_operation_denied")
+os.environ.setdefault("SECURITY_SENSITIVE_SUCCESS_CODE", "sensitive_operation_allowed")
 
 from app.core.config import get_settings
 from app.db.base import Base

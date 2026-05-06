@@ -42,6 +42,18 @@ class Settings(BaseSettings):
         default=24,
         alias="AUTH_SESSION_TTL_HOURS",
     )
+    security_sensitive_audit_failure_code: str = Field(
+        default="audit_unavailable",
+        alias="SECURITY_SENSITIVE_AUDIT_FAILURE_CODE",
+    )
+    security_sensitive_denied_code: str = Field(
+        default="sensitive_operation_denied",
+        alias="SECURITY_SENSITIVE_DENIED_CODE",
+    )
+    security_sensitive_success_code: str = Field(
+        default="sensitive_operation_allowed",
+        alias="SECURITY_SENSITIVE_SUCCESS_CODE",
+    )
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,

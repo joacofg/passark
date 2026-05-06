@@ -5,17 +5,21 @@ from sqlalchemy.orm import Session as OrmSession
 from app.core.config import Settings, get_settings
 from app.db.base import Session, User
 from app.db.session import (
+    SensitiveOperationContext,
     authenticate_user,
     create_session,
     get_auth_error,
     get_current_session,
     get_current_user,
     get_db,
+    get_sensitive_operation_guard,
     invalidate_session,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 protected_router = APIRouter(prefix="/protected", tags=["protected"])
+
+SENSITIVE_OPERATION_REVEAL = "vault_access_probe"
 
 
 class LoginRequest(BaseModel):
@@ -36,6 +40,16 @@ class SessionResponse(BaseModel):
 class ProtectedResponse(BaseModel):
     user: SessionUserResponse
     session_id: int
+
+
+class SensitiveOperationResponse(BaseModel):
+    operation: str
+    status: str
+    actor_id: int
+    audit_event_id: int
+
+
+sensitive_operation_guard = get_sensitive_operation_guard(SENSITIVE_OPERATION_REVEAL)
 
 
 def _write_session_cookie(response: Response, session: Session, settings: Settings) -> None:
@@ -105,3 +119,15 @@ def whoami(
     session: Session = Depends(get_current_session),
 ) -> ProtectedResponse:
     return ProtectedResponse(user=_serialize_user(user), session_id=session.id)
+
+
+@protected_router.post("/vault-access-probe", response_model=SensitiveOperationResponse)
+def vault_access_probe(
+    context: SensitiveOperationContext = Depends(sensitive_operation_guard),
+) -> SensitiveOperationResponse:
+    return SensitiveOperationResponse(
+        operation=SENSITIVE_OPERATION_REVEAL,
+        status="allowed",
+        actor_id=context.user.id,
+        audit_event_id=context.audit_event.id,
+    )
