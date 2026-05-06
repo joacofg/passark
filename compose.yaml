@@ -27,8 +27,8 @@ services:
       - sh
       - -c
       - |
-        echo "Backend scaffold will be added in T02."
-        sleep infinity
+        pip install --no-cache-dir -e .[dev] && \
+        uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
     env_file:
       - .env
     environment:
@@ -40,6 +40,14 @@ services:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:${BACKEND_PORT:-8000}/health').status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     volumes:
       - ./backend:/workspace/backend
 

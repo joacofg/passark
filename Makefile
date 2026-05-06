@@ -34,3 +34,9 @@ config:
 
 verify-s01:
 	bash scripts/verify-s01.sh
+
+backend-migrate:
+	$(COMPOSE) run --rm backend alembic upgrade head
+
+backend-test:
+	$(COMPOSE) run --rm backend pytest backend/tests/test_health.py backend/tests/test_config.py
