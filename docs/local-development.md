@@ -38,6 +38,12 @@ The repository assumes:
 make up
 make ps
 make logs
+make logs-postgres
+make logs-backend
+make logs-frontend
+make backend-migrate
+make frontend-test
+make frontend-lint
 make verify-s01
 make down
 ```
@@ -46,9 +52,9 @@ make down
 
 | Service | Expected URL / port | Notes |
 |---|---|---|
-| postgres | `localhost:5432` | primary database |
-| backend | `http://localhost:8000` | future `/health` endpoint lands in T02 |
-| frontend | `http://localhost:3000` | app shell lands in T03 |
+| postgres | `localhost:5432` | primary database; should report `healthy` in Compose |
+| backend | `http://localhost:8000` | `GET /health` must return service/environment status |
+| frontend | `http://localhost:3000` | app shell should render the configured backend seam |
 
 ## Diagnostics baseline
 
@@ -59,15 +65,21 @@ docker compose ps
 docker compose logs postgres
 docker compose logs backend
 docker compose logs frontend
+curl http://localhost:8000/health
 bash scripts/verify-s01.sh
 ```
 
-The intent is to keep startup and migration failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
+The intent is to keep startup and migration failures attributable to the failing service or command rather than hidden in ad-hoc orchestration. The verification script prints compose state, checks service health, validates the backend `/health` payload, and confirms the frontend shell is serving the expected backend seam.
 
-## Current slice limitations
+## Integrated verification workflow
 
-At T01, the root workflow exists before the full application code exists.
+Run the slice proof with the same commands expected by the task contract:
 
-- PostgreSQL is the only service expected to be fully healthy immediately.
-- Backend and frontend container definitions are placeholders that preserve canonical service names, ports, and env seams for downstream tasks.
-- `scripts/verify-s01.sh` intentionally verifies the tracked foundation contract first and will be extended by later tasks in S01.
+```bash
+docker compose config
+docker compose up --build -d
+bash scripts/verify-s01.sh
+docker compose down -v
+```
+
+If Docker itself is unavailable, `bash scripts/verify-s01.sh` fails fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.

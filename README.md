@@ -13,7 +13,7 @@ The local developer contract for M001/S01 is a **Docker Compose-first workflow**
 
 ## Current foundation status
 
-This slice establishes the repository-level contract and local workflow scaffolding. Later tasks in the same slice will add the runnable backend, frontend, database migrations, and full stack verification on top of these same files.
+This slice now establishes the runnable local foundation: PostgreSQL, the FastAPI backend, and the Next.js frontend boot through one Compose workflow, expose health and inspection surfaces, and can be smoke-verified with the tracked root script.
 
 ## Requirements visible in the foundation
 
@@ -39,11 +39,17 @@ make init
 ### Daily commands
 
 ```bash
-make up           # build and start the local stack
-make ps           # inspect service/container state
-make logs         # tail compose logs
-make verify-s01   # run the tracked slice verification entrypoint
-make down         # stop the stack
+make up                # build and start postgres, backend, and frontend
+make ps                # inspect service/container state and health
+make logs              # tail all compose logs
+make logs-postgres     # inspect database startup and readiness
+make logs-backend      # inspect API boot, migrations, or health failures
+make logs-frontend     # inspect Next.js boot and runtime issues
+make backend-migrate   # run Alembic migrations inside the backend container
+make frontend-test     # run tracked frontend tests in the frontend container
+make frontend-lint     # run tracked frontend lint in the frontend container
+make verify-s01        # assert compose health plus backend/frontend smoke checks
+make down              # stop the stack
 ```
 
 ## Canonical local service contract
@@ -78,10 +84,11 @@ docker compose ps
 docker compose logs backend
 docker compose logs frontend
 docker compose logs postgres
+curl http://localhost:8000/health
 bash scripts/verify-s01.sh
 ```
 
-As the slice progresses, these commands become the first-line diagnosis path for startup and health issues.
+`bash scripts/verify-s01.sh` now renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend `/health` payload, and confirms the frontend responds with the documented app shell plus backend seam. If any service is unhealthy, the script prints recent service logs so the failing layer is obvious.
 
 ## Repository roadmap context
 

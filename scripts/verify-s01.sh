@@ -42,18 +42,52 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if command -v docker >/dev/null 2>&1; then
-  if ! docker info >/dev/null 2>&1; then
-    echo "docker daemon unavailable; start Docker before running compose-backed verification." >&2
-    exit 1
-  fi
-
-  if ! docker compose config >/dev/null; then
-    echo "docker compose config failed." >&2
-    exit 1
-  fi
-else
-  echo "docker not installed; skipped docker compose config check." >&2
+if ! command -v docker >/dev/null 2>&1; then
+  echo "docker not installed; cannot run compose-backed verification." >&2
+  exit 1
 fi
 
-echo "S01 foundation contract verification passed."
+if ! docker info >/dev/null 2>&1; then
+  echo "docker daemon unavailable; start Docker before running compose-backed verification." >&2
+  exit 1
+fi
+
+echo "==> Rendering compose configuration"
+docker compose config >/dev/null
+
+echo "==> Inspecting service state"
+docker compose ps
+
+postgres_status="$(docker compose ps --format json postgres | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+backend_status="$(docker compose ps --format json backend | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+frontend_status="$(docker compose ps --format json frontend | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+
+for pair in \
+  "postgres:$postgres_status" \
+  "backend:$backend_status" \
+  "frontend:$frontend_status"; do
+  service="${pair%%:*}"
+  status="${pair#*:}"
+  if [[ "$status" != "healthy" ]]; then
+    echo "$service service is not healthy (status: ${status:-unknown})." >&2
+    echo "Recent $service logs:" >&2
+    docker compose logs --tail=50 "$service" >&2 || true
+    exit 1
+  fi
+done
+
+backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/health"
+frontend_url="http://127.0.0.1:${FRONTEND_PORT:-3000}"
+
+echo "==> Probing backend health endpoint: $backend_url"
+backend_payload="$(curl --fail --silent --show-error "$backend_url")"
+printf '%s\n' "$backend_payload"
+
+printf '%s' "$backend_payload" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["status"] == "ok"; assert payload["service"] == "passark-backend"; assert payload["environment"]'
+
+echo "==> Probing frontend entrypoint: $frontend_url"
+frontend_payload="$(curl --fail --silent --show-error "$frontend_url")"
+printf '%s' "$frontend_payload" | grep -q "PassArk operator workspace"
+printf '%s' "$frontend_payload" | grep -q "http://localhost:${BACKEND_PORT:-8000}"
+
+echo "S01 integrated stack verification passed."
