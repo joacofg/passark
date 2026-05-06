@@ -13,7 +13,7 @@ The local developer contract for M001/S01 is a **Docker Compose-first workflow**
 
 ## Current foundation status
 
-This slice now establishes the runnable local foundation: PostgreSQL, the FastAPI backend, and the Next.js frontend boot through one Compose workflow, expose health and inspection surfaces, and can be smoke-verified with the tracked root script.
+This slice now establishes the runnable local foundation: PostgreSQL, the FastAPI backend, and the Next.js frontend boot through one Compose workflow, expose health and inspection surfaces, and now prove a backend-owned bootstrap auth flow from the real frontend shell.
 
 ## Requirements visible in the foundation
 
@@ -49,6 +49,7 @@ make backend-migrate   # run Alembic migrations inside the backend container
 make frontend-test     # run tracked frontend tests in the frontend container
 make frontend-lint     # run tracked frontend lint in the frontend container
 make verify-s01        # assert compose health plus backend/frontend smoke checks
+make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
 make down              # stop the stack
 ```
 
@@ -57,8 +58,8 @@ make down              # stop the stack
 | Service | Compose name | Host port | Purpose |
 |---|---|---:|---|
 | PostgreSQL | `postgres` | `5432` | primary relational database |
-| Backend API | `backend` | `8000` | FastAPI app and future migrations/auth/audit seams |
-| Frontend web | `frontend` | `3000` | Next.js operator UI |
+| Backend API | `backend` | `8000` | FastAPI app, sessions, and protected auth seams |
+| Frontend web | `frontend` | `3000` | Next.js login-first operator UI |
 
 ## Environment contract
 
@@ -74,6 +75,15 @@ Baseline variables:
 - `FRONTEND_PORT`
 - `NEXT_PUBLIC_API_BASE_URL`
 - `PASSARK_ENV`
+- `AUTH_BOOTSTRAP_ADMIN_EMAIL`
+- `AUTH_BOOTSTRAP_ADMIN_PASSWORD`
+- `AUTH_SESSION_COOKIE_NAME`
+- `AUTH_SESSION_COOKIE_SECURE`
+- `AUTH_SESSION_COOKIE_SAMESITE`
+- `AUTH_SESSION_COOKIE_DOMAIN`
+- `AUTH_SESSION_TTL_HOURS`
+
+The frontend signs in with the bootstrap operator credentials configured for the backend. Those credentials are verified server-side and returned to the browser only as an HTTP-only session cookie — never as a frontend-managed bearer token.
 
 ## Diagnostics baseline
 
@@ -84,11 +94,19 @@ docker compose ps
 docker compose logs backend
 docker compose logs frontend
 docker compose logs postgres
-curl http://localhost:8000/health
+curl http://localhost:8000/api/v1/health
 bash scripts/verify-s01.sh
+bash scripts/verify-s02.sh
 ```
 
-`bash scripts/verify-s01.sh` now renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend `/health` payload, and confirms the frontend responds with the documented app shell plus backend seam. If any service is unhealthy, the script prints recent service logs so the failing layer is obvious.
+`bash scripts/verify-s01.sh` renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend health payload, and confirms the frontend responds with the documented app shell plus backend seam.
+
+`bash scripts/verify-s02.sh` keeps the same Docker-unavailable failure triage while additionally proving that:
+
+1. anonymous access to `/api/v1/protected/whoami` fails with the stable 401 auth contract,
+2. login with the configured bootstrap operator succeeds,
+3. the authenticated cookie reaches the protected backend endpoint successfully, and
+4. the frontend serves the login-first and protected-shell routes used by the operator flow.
 
 ## Repository roadmap context
 
