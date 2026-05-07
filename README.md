@@ -116,7 +116,7 @@ bash scripts/verify-s03.sh
 1. anonymous access to `/api/v1/protected/whoami` fails with the stable 401 auth contract,
 2. login with the configured bootstrap operator succeeds,
 3. the authenticated cookie reaches the protected backend endpoint successfully, and
-4. the frontend serves the login-first and protected-shell routes used by the operator flow.
+4. the frontend serves the login-first and protected-shell routes used by the operator flow, including the `Operator shell` heading, backend-session loading state, and `Run vault access probe` audited-action affordance.
 
 `bash scripts/verify-s03.sh` closes the security slice by proving that:
 

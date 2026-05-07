@@ -158,5 +158,8 @@ frontend_login="$(curl --fail --silent --show-error "$frontend_url/login")"
 printf '%s' "$frontend_login" | grep -q "Authenticate with the local bootstrap operator"
 frontend_operator="$(curl --fail --silent --show-error "$frontend_url/operator")"
 printf '%s' "$frontend_operator" | grep -q "Checking backend session"
+printf '%s' "$frontend_operator" | grep -q "Operator shell"
+printf '%s' "$frontend_operator" | grep -q "Run vault access probe"
+printf '%s' "$frontend_operator" | grep -q "protected/whoami"
 
 echo "S02 integrated auth verification passed."

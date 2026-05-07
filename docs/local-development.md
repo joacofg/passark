@@ -102,7 +102,7 @@ The intent is to keep startup, auth, migration, and code-quality failures attrib
 `make quality-gates` is the fast host-side regression sweep. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` without invoking Docker-gated proof.
 
 - `verify-s01` checks baseline stack health and shell rendering.
-- `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend route availability.
+- `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend operator route copy for the `Operator shell`, backend-session loading state, and `Run vault access probe` affordance.
 - `verify-s03` extends the proof to the audited sensitive route, including persisted PostgreSQL audit evidence for success and invalidated-session denial.
 
 If Docker itself is unavailable, `make verify-s01`, `make verify-s02`, and `make verify-s03` fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.

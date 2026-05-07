@@ -155,6 +155,8 @@ bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
 ```
 
+`verify-s02` is the canonical proof that the protected operator shell and backend session contract are still aligned. It verifies anonymous `whoami` rejection, bootstrap login success, authenticated `whoami` access, and the operator-facing shell copy for the loading state plus `vault-access-probe` affordance.
+
 `verify-s03` is the canonical proof for the security-sensitive route. It:
 
 - checks Docker Compose service health,
