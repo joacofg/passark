@@ -8,6 +8,7 @@ import {
   readClientSession,
   readProtectedWhoAmI,
   readServerSession,
+  runVaultAccessProbe,
 } from "../lib/auth";
 
 describe("frontend auth client", () => {
@@ -195,6 +196,39 @@ describe("frontend auth client", () => {
     expect(payload.session_id).toBe(7);
   });
 
+  it("posts the audited vault access probe with cookies included", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          operation: "vault_access_probe",
+          status: "allowed",
+          actor_id: 1,
+          audit_event_id: 12,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const payload = await runVaultAccessProbe();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend:8000/api/v1/protected/vault-access-probe",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+      }),
+    );
+    expect(payload).toEqual({
+      operation: "vault_access_probe",
+      status: "allowed",
+      actor_id: 1,
+      audit_event_id: 12,
+    });
+  });
+
   it("converts the backend 401 contract into an unauthenticated request error", async () => {
     vi.spyOn(global, "fetch").mockResolvedValueOnce(
       new Response(
@@ -216,6 +250,30 @@ describe("frontend auth client", () => {
       status: 401,
       code: "auth_unauthenticated",
       message: "Authentication required.",
+    });
+  });
+
+  it("preserves audited protected-action failure codes for operator UI diagnostics", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "audit_unavailable",
+            message: "Audit logging is unavailable.",
+          },
+        }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(runVaultAccessProbe()).rejects.toMatchObject({
+      name: "AuthApiRequestError",
+      status: 503,
+      code: "audit_unavailable",
+      message: "Audit logging is unavailable.",
     });
   });
 

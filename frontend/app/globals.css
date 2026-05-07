@@ -9,6 +9,8 @@
   --accent-strong: #0ea5e9;
   --accent-soft: rgba(14, 165, 233, 0.18);
   --danger: #fda4af;
+  --success: #86efac;
+  --success-soft: rgba(34, 197, 94, 0.16);
 }
 
 * {
@@ -86,10 +88,18 @@ input {
   padding: 4rem 0 5rem;
 }
 
+.app-shell--operator {
+  width: min(1120px, calc(100vw - 3rem));
+}
+
 .hero-card,
 .status-card,
 .auth-card,
-.fallback-card {
+.fallback-card,
+.dashboard-card,
+.probe-panel,
+.probe-status__success,
+.probe-status__error {
   background: var(--panel);
   border: 1px solid var(--panel-border);
   border-radius: 24px;
@@ -98,7 +108,11 @@ input {
 
 .hero-card,
 .auth-card,
-.fallback-card {
+.fallback-card,
+.probe-panel,
+.dashboard-card,
+.probe-status__success,
+.probe-status__error {
   padding: 2rem;
 }
 
@@ -232,7 +246,8 @@ input {
   padding: 0.9rem 1rem;
 }
 
-.status-grid {
+.status-grid,
+.dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 1rem;
@@ -244,21 +259,39 @@ input {
 }
 
 .status-card h2,
-.fallback-card h2 {
+.fallback-card h2,
+.dashboard-card h2,
+.probe-panel h2,
+.probe-status__success h3,
+.probe-status__error h3 {
   margin: 0;
   font-size: 1rem;
 }
 
-.status-card p {
+.status-card p,
+.dashboard-card p,
+.probe-panel__lede,
+.probe-status__success p,
+.probe-status__error p,
+.probe-status__hint {
   margin: 0.9rem 0 0.35rem;
+  line-height: 1.6;
+}
+
+.status-card p {
   font-size: 1.1rem;
   font-weight: 600;
 }
 
 .status-card span,
-.fallback-card p {
+.fallback-card p,
+.dashboard-card p,
+.probe-panel__lede,
+.probe-status__hint,
+.probe-status__success p,
+.probe-status__success li,
+.probe-status__error p {
   color: var(--muted);
-  line-height: 1.5;
 }
 
 .fallback-card {
@@ -270,10 +303,58 @@ input {
   justify-self: start;
 }
 
+.dashboard-card {
+  min-height: 100%;
+}
+
+.dashboard-card--highlight {
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.18), var(--panel));
+}
+
+.probe-panel {
+  display: grid;
+  gap: 1.5rem;
+  margin-top: 0.5rem;
+}
+
+.probe-panel__copy .eyebrow {
+  margin-bottom: 0.75rem;
+}
+
+.probe-panel__body {
+  display: grid;
+  gap: 1rem;
+}
+
+.probe-status {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.probe-status__hint {
+  margin: 0;
+}
+
+.probe-status__success {
+  border-color: rgba(134, 239, 172, 0.35);
+  background: linear-gradient(180deg, var(--success-soft), var(--panel));
+}
+
+.probe-status__success ul {
+  margin: 0.9rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.probe-status__error {
+  border-color: rgba(251, 113, 133, 0.28);
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.28), var(--panel));
+}
+
 @media (max-width: 640px) {
   .site-header__inner,
-  .app-shell {
-    width: min(100vw - 1.5rem, 1040px);
+  .app-shell,
+  .app-shell--operator {
+    width: min(100vw - 1.5rem, 1120px);
   }
 
   .site-header__inner {
@@ -285,14 +366,19 @@ input {
     font-size: 0.95rem;
   }
 
-  .app-shell {
+  .app-shell,
+  .app-shell--operator {
     padding: 2rem 0 3rem;
   }
 
   .hero-card,
   .status-card,
   .auth-card,
-  .fallback-card {
+  .fallback-card,
+  .dashboard-card,
+  .probe-panel,
+  .probe-status__success,
+  .probe-status__error {
     border-radius: 20px;
   }
 }

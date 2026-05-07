@@ -17,6 +17,13 @@ export type ProtectedWhoAmIResponse = {
   session_id: number;
 };
 
+export type VaultAccessProbeResponse = {
+  operation: string;
+  status: string;
+  actor_id: number;
+  audit_event_id: number;
+};
+
 export type AuthApiError = {
   detail?: {
     code?: string;
@@ -163,6 +170,15 @@ export async function readProtectedWhoAmI(): Promise<ProtectedWhoAmIResponse> {
     method: "GET",
     cache: "no-store",
   });
+}
+
+export async function runVaultAccessProbe(): Promise<VaultAccessProbeResponse> {
+  return authenticatedJsonFetch<VaultAccessProbeResponse>(
+    "/protected/vault-access-probe",
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function isUnauthenticatedError(error: unknown): boolean {

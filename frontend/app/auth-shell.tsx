@@ -8,19 +8,29 @@ import {
   AuthApiRequestError,
   AuthenticatedUser,
   ProtectedWhoAmIResponse,
+  VaultAccessProbeResponse,
   isUnauthenticatedError,
   login,
   logout,
   readProtectedWhoAmI,
+  runVaultAccessProbe,
 } from "@/lib/auth";
 
 const DEFAULT_ERROR_MESSAGE = "Unable to sign in with the provided credentials.";
+const DEFAULT_PROBE_ERROR_MESSAGE =
+  "Unable to complete the protected vault access check right now.";
 
 type OperatorState =
   | { status: "loading" }
   | { status: "authenticated"; payload: ProtectedWhoAmIResponse }
   | { status: "unauthenticated" }
   | { status: "error"; message: string };
+
+type ProbeState =
+  | { status: "idle" }
+  | { status: "running" }
+  | { status: "success"; payload: VaultAccessProbeResponse }
+  | { status: "error"; message: string; code?: string };
 
 export function LoginForm() {
   const router = useRouter();
@@ -125,9 +135,81 @@ function OperatorSummary({
   );
 }
 
+function ProbePanel({
+  state,
+  onRun,
+}: {
+  state: ProbeState;
+  onRun: () => Promise<void>;
+}) {
+  return (
+    <section className="probe-panel" aria-label="Audited operator action">
+      <div className="probe-panel__copy">
+        <p className="eyebrow">Audited sensitive action</p>
+        <h2>Vault access probe</h2>
+        <p className="probe-panel__lede">
+          Trigger the backend&rsquo;s audited <code>vault-access-probe</code> route to
+          confirm protected actions resolve the current operator and surface
+          stable failure codes without exposing secrets.
+        </p>
+      </div>
+
+      <div className="probe-panel__body">
+        <button
+          className="button button--primary"
+          disabled={state.status === "running"}
+          onClick={() => {
+            void onRun();
+          }}
+          type="button"
+        >
+          {state.status === "running" ? "Running audit check…" : "Run vault access probe"}
+        </button>
+
+        <div className="probe-status" aria-live="polite">
+          {state.status === "idle" ? (
+            <p className="probe-status__hint" role="status">
+              Ready to confirm audited protected access.
+            </p>
+          ) : null}
+
+          {state.status === "running" ? (
+            <p className="probe-status__hint" role="status">
+              Running audited protected action…
+            </p>
+          ) : null}
+
+          {state.status === "success" ? (
+            <div className="probe-status__success" role="status">
+              <h3>Protected action allowed</h3>
+              <p>
+                Operation <code>{state.payload.operation}</code> completed for operator #{" "}
+                {state.payload.actor_id}.
+              </p>
+              <ul>
+                <li>Status: {state.payload.status}</li>
+                <li>Audit event: #{state.payload.audit_event_id}</li>
+              </ul>
+            </div>
+          ) : null}
+
+          {state.status === "error" ? (
+            <div className="probe-status__error" role="alert">
+              <h3>Protected action failed</h3>
+              <p>{state.message}</p>
+              {state.code ? <p>Failure code: {state.code}</p> : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function OperatorShell() {
   const router = useRouter();
   const [state, setState] = useState<OperatorState>({ status: "loading" });
+  const [probeState, setProbeState] = useState<ProbeState>({ status: "idle" });
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const authenticatedPayload =
     state.status === "authenticated" ? state.payload : null;
@@ -172,6 +254,40 @@ export function OperatorShell() {
       router.push("/login?reason=signed-out");
       router.refresh();
       setIsLoggingOut(false);
+    }
+  }
+
+  async function handleVaultAccessProbe() {
+    setProbeState({ status: "running" });
+
+    try {
+      const payload = await runVaultAccessProbe();
+      setProbeState({ status: "success", payload });
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        setState({ status: "unauthenticated" });
+        setProbeState({
+          status: "error",
+          message: error.message,
+          code: error.code,
+        });
+        router.replace("/login?reason=unauthenticated");
+        return;
+      }
+
+      if (error instanceof AuthApiRequestError) {
+        setProbeState({
+          status: "error",
+          message: error.message,
+          code: error.code,
+        });
+        return;
+      }
+
+      setProbeState({
+        status: "error",
+        message: DEFAULT_PROBE_ERROR_MESSAGE,
+      });
     }
   }
 
@@ -225,10 +341,31 @@ export function OperatorShell() {
               {isLoggingOut ? "Signing out…" : "Sign out"}
             </button>
           </div>
+
           <OperatorSummary
             sessionId={authenticatedPayload.session_id}
             user={authenticatedPayload.user}
           />
+
+          <section className="dashboard-grid" aria-label="Operator dashboard status">
+            <article className="dashboard-card dashboard-card--highlight">
+              <h2>Session trust boundary</h2>
+              <p>
+                The backend owns authentication state. This shell only renders
+                operator details after the protected session resolves.
+              </p>
+            </article>
+            <article className="dashboard-card">
+              <h2>Failure diagnosis</h2>
+              <p>
+                Missing sessions redirect to sign-in, protected fetch failures
+                stay visible here, and audited action denials surface stable
+                backend error codes.
+              </p>
+            </article>
+          </section>
+
+          <ProbePanel onRun={handleVaultAccessProbe} state={probeState} />
         </>
       ) : null}
     </section>
