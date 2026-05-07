@@ -1,17 +1,14 @@
 import Link from "next/link";
 
-import { getApiBaseUrl, getRuntimeEnvironment, readSession } from "@/lib/auth";
+import {
+  getApiBaseUrl,
+  getRuntimeEnvironment,
+  readServerSession,
+} from "@/lib/auth";
 
 export default async function HomePage() {
-  let hasActiveSession = false;
-
-  try {
-    await readSession();
-    hasActiveSession = true;
-  } catch {
-    hasActiveSession = false;
-  }
-
+  const sessionState = await readServerSession();
+  const hasActiveSession = sessionState.status === "authenticated";
   const runtimeEnvironment = getRuntimeEnvironment();
   const apiBaseUrl = getApiBaseUrl();
 
@@ -36,9 +33,11 @@ export default async function HomePage() {
         </div>
 
         <p className="session-hint" role="status">
-          {hasActiveSession
+          {sessionState.status === "authenticated"
             ? "A backend session is already active in this browser."
-            : "No backend session detected. Protected content stays hidden until sign-in succeeds."}
+            : sessionState.status === "unauthenticated"
+              ? "No backend session detected. Protected content stays hidden until sign-in succeeds."
+              : "Session status could not be confirmed from this server render. Continue to sign-in or open the operator shell to retry in-browser."}
         </p>
       </section>
 
@@ -52,6 +51,21 @@ export default async function HomePage() {
           <h2>Runtime environment</h2>
           <p>{runtimeEnvironment}</p>
           <span>Mirrors PASSARK_ENV for quick operator diagnosis.</span>
+        </article>
+        <article className="status-card">
+          <h2>Landing-page session check</h2>
+          <p>
+            {sessionState.status === "authenticated"
+              ? "Authenticated"
+              : sessionState.status === "unauthenticated"
+                ? "Unauthenticated"
+                : "Unavailable"}
+          </p>
+          <span>
+            {sessionState.status === "error"
+              ? sessionState.error.message
+              : "Server render only reports safe session state; protected reads still happen in the operator shell."}
+          </span>
         </article>
       </section>
     </main>

@@ -8,22 +8,25 @@ vi.mock("../lib/auth", async () => {
 
   return {
     ...actual,
-    readSession: vi.fn(),
+    readServerSession: vi.fn(),
   };
 });
 
-const { readSession } = await import("../lib/auth");
-const readSessionMock = vi.mocked(readSession);
+const { readServerSession } = await import("../lib/auth");
+const readServerSessionMock = vi.mocked(readServerSession);
 
 describe("HomePage", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://backend:8000/api/v1";
     process.env.PASSARK_ENV = "test";
-    readSessionMock.mockReset();
+    readServerSessionMock.mockReset();
   });
 
   it("renders the login-first shell when no backend session exists", async () => {
-    readSessionMock.mockRejectedValueOnce(new Error("unauthenticated"));
+    readServerSessionMock.mockResolvedValueOnce({
+      status: "unauthenticated",
+      error: new Error("Authentication required."),
+    });
 
     render(await HomePage());
 
@@ -37,14 +40,18 @@ describe("HomePage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("http://backend:8000/api/v1")).toBeInTheDocument();
     expect(screen.getByText("test")).toBeInTheDocument();
+    expect(screen.getByText("Unauthenticated")).toBeInTheDocument();
   });
 
   it("surfaces an active backend session without rendering protected data", async () => {
-    readSessionMock.mockResolvedValueOnce({
-      user: {
-        id: 1,
-        email: "admin@passark.local",
-        is_active: true,
+    readServerSessionMock.mockResolvedValueOnce({
+      status: "authenticated",
+      session: {
+        user: {
+          id: 1,
+          email: "admin@passark.local",
+          is_active: true,
+        },
       },
     });
 
@@ -55,6 +62,25 @@ describe("HomePage", () => {
     ).toBeInTheDocument();
     expect(
       screen.queryByText(/session #/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Authenticated")).toBeInTheDocument();
+  });
+
+  it("surfaces server-render auth seam failures without claiming the browser is signed out", async () => {
+    readServerSessionMock.mockResolvedValueOnce({
+      status: "error",
+      error: new Error("Backend session lookup failed."),
+    });
+
+    render(await HomePage());
+
+    expect(
+      screen.getByText(/session status could not be confirmed from this server render/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Backend session lookup failed.")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/no backend session detected/i),
     ).not.toBeInTheDocument();
   });
 });

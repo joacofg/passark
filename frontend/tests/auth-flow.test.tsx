@@ -1,11 +1,13 @@
 import {
   AuthApiRequestError,
+  authenticatedJsonFetch,
   getApiBaseUrl,
   isUnauthenticatedError,
   login,
   logout,
+  readClientSession,
   readProtectedWhoAmI,
-  readSession,
+  readServerSession,
 } from "../lib/auth";
 
 describe("frontend auth client", () => {
@@ -42,7 +44,31 @@ describe("frontend auth client", () => {
     expect(payload.user.email).toBe("admin@passark.local");
   });
 
-  it("reads the current backend session with cookies included", async () => {
+  it("exposes an authenticated client fetch helper for protected reads", async () => {
+    const fetchMock = vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const payload = await authenticatedJsonFetch<{ ok: boolean }>("/health", {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://backend:8000/api/v1/health",
+      expect.objectContaining({
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+      }),
+    );
+    expect(payload).toEqual({ ok: true });
+  });
+
+  it("reads the current backend session with cookies included for client flows", async () => {
     const fetchMock = vi.spyOn(global, "fetch").mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -55,7 +81,7 @@ describe("frontend auth client", () => {
       ),
     );
 
-    await readSession();
+    await readClientSession();
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://backend:8000/api/v1/auth/session",
@@ -65,6 +91,81 @@ describe("frontend auth client", () => {
         cache: "no-store",
       }),
     );
+  });
+
+  it("maps an authenticated server-side session check into a typed session state", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          user: { id: 1, email: "admin@passark.local", is_active: true },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await expect(readServerSession()).resolves.toEqual({
+      status: "authenticated",
+      session: {
+        user: { id: 1, email: "admin@passark.local", is_active: true },
+      },
+    });
+  });
+
+  it("maps the backend unauthenticated contract into a typed server-side unauthenticated state", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "auth_unauthenticated",
+            message: "Authentication required.",
+          },
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const payload = await readServerSession();
+
+    expect(payload.status).toBe("unauthenticated");
+    if (payload.status === "unauthenticated") {
+      expect(payload.error).toMatchObject({
+        status: 401,
+        code: "auth_unauthenticated",
+        message: "Authentication required.",
+      });
+    }
+  });
+
+  it("preserves non-auth server-side session failures for operator diagnostics", async () => {
+    vi.spyOn(global, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          detail: {
+            code: "backend_unavailable",
+            message: "Backend session lookup failed.",
+          },
+        }),
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    const payload = await readServerSession();
+
+    expect(payload.status).toBe("error");
+    if (payload.status === "error") {
+      expect(payload.error).toMatchObject({
+        message: "Backend session lookup failed.",
+      });
+    }
   });
 
   it("loads the protected whoami payload with cookies included", async () => {
