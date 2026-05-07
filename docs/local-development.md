@@ -101,7 +101,7 @@ bash scripts/verify-milestone.sh
 
 The intent is to keep startup, auth, migration, and code-quality failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
 
-`make quality-gates` is the fast host-side regression sweep. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` without invoking Docker-gated proof.
+`make quality-gates` is the fast host-side regression sweep. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` without invoking compose-backed proof.
 
 - `verify-s01` checks baseline stack health and shell rendering.
 - `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend operator route copy for the `Operator shell`, backend-session loading state, and `Run vault access probe` affordance.
@@ -109,6 +109,8 @@ The intent is to keep startup, auth, migration, and code-quality failures attrib
 - `verify-milestone` is the canonical compose-backed milestone wrapper. It first treats Docker daemon availability as a hard infrastructure prerequisite, prints a compose snapshot for fast triage, and then runs `verify-s02` followed by `verify-s03` so auth flow failures and audit-persistence failures remain attributable.
 
 If Docker itself is unavailable, `make verify-s01`, `make verify-s02`, `make verify-s03`, and `make verify-milestone` fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
+
+Use `make quality-gates` before `make verify-milestone` when you want a fast host-only regression pass. Use `make verify-milestone` when you need the assembled compose-backed proof that frontend, backend, and PostgreSQL still satisfy the milestone acceptance contract together.
 
 ## Integrated verification workflow
 
@@ -128,6 +130,10 @@ cd frontend && npm test -- --runInBand
 cd .. && bash scripts/verify-milestone.sh
 docker compose down -v
 ```
+
+`make quality-gates` proves the tracked host-side tests and lint still pass. It does **not** prove Docker availability, compose health, backend/frontend session integration, or persisted PostgreSQL audit evidence.
+
+`make verify-milestone` is the acceptance proof for the assembled local environment. It wraps `verify-s02` and `verify-s03` so operators can run one truthful command for the final auth-plus-audit contract without blurring infrastructure failures with application regressions.
 
 A healthy milestone verification run proves all of the following:
 

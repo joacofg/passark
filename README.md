@@ -49,7 +49,7 @@ make backend-migrate   # run Alembic migrations inside the backend container
 make backend-test      # run backend auth/config/health tests on the host
 make frontend-test     # run tracked frontend tests on the host
 make frontend-lint     # run tracked frontend lint on the host
-make quality-gates     # run the fast host-side quality checks without Docker-gated proof
+make quality-gates     # run the fast host-side tests/lint checks without compose-backed environment proof
 make verify-s01        # assert compose health plus backend/frontend smoke checks
 make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
 make verify-s03        # prove audited sensitive access plus fail-closed denial and persisted audit rows
@@ -106,9 +106,12 @@ make quality-gates
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
+bash scripts/verify-milestone.sh
 ```
 
 `make quality-gates` is the supported fast host-side aggregate. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` in sequence without invoking Docker-gated verification implicitly.
+
+Use `make quality-gates` to catch host-side regressions in tests or lint first. Use `make verify-milestone` when you need the compose-backed acceptance proof for the assembled system.
 
 `bash scripts/verify-s01.sh` renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend health payload, and confirms the frontend responds with the documented app shell plus backend seam.
 
@@ -127,6 +130,8 @@ bash scripts/verify-s03.sh
 4. PostgreSQL contains the matching success and denial `audit_events` rows keyed by correlation/request identifiers so missing persistence cannot look like success.
 
 `bash scripts/verify-milestone.sh` is the canonical milestone-level wrapper. It fails fast when Docker is unavailable so infrastructure gating is reported distinctly, prints a compose service snapshot, then runs the tracked S02 and S03 proofs in sequence without reimplementing their checks.
+
+The milestone wrapper proves the real compose-backed auth and audit flow. It does **not** replace the faster host-side `quality-gates` checks, and `quality-gates` does **not** claim Docker, compose health, cookie-session integration, or PostgreSQL audit persistence proof.
 
 ## Repository roadmap context
 

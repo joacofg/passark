@@ -11,6 +11,7 @@ This is **not** a production-hardening guide and **not** a general web security 
 - `backend/tests/test_auth.py`
 - `bash scripts/verify-s02.sh`
 - `bash scripts/verify-s03.sh`
+- `bash scripts/verify-milestone.sh`
 
 Where this repository does **not** yet implement a defense, this document says so explicitly.
 
@@ -144,8 +145,10 @@ Use the documented verification entrypoints first:
 
 ```bash
 make backend-test
+make quality-gates
 make verify-s02
 make verify-s03
+make verify-milestone
 ```
 
 Or run the scripts directly:
@@ -153,7 +156,10 @@ Or run the scripts directly:
 ```bash
 bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
+bash scripts/verify-milestone.sh
 ```
+
+`make quality-gates` is the fast host-side regression sweep. It proves the tracked backend/frontend tests and lint still pass, but it does **not** prove Docker availability, compose health, cookie-session integration, or persisted PostgreSQL audit evidence.
 
 `verify-s02` is the canonical proof that the protected operator shell and backend session contract are still aligned. It verifies anonymous `whoami` rejection, bootstrap login success, authenticated `whoami` access, and the operator-facing shell copy for the loading state plus `vault-access-probe` affordance.
 
@@ -167,6 +173,8 @@ bash scripts/verify-s03.sh
 - logs out to invalidate the session,
 - proves fail-closed denial for the invalidated session, and
 - queries PostgreSQL `audit_events` rows by correlation/request identifiers.
+
+`verify-milestone` is the canonical milestone-level wrapper. It prints a compose service snapshot, treats Docker daemon availability as an explicit infrastructure gate, and then runs `verify-s02` followed by `verify-s03` without changing their acceptance contract. Use it when you need one truthful compose-backed proof of the assembled auth, operator-shell, and audit-evidence flow.
 
 When investigating drift or failures, the first inspection surfaces are:
 
