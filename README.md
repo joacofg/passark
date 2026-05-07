@@ -53,6 +53,7 @@ make quality-gates     # run the fast host-side quality checks without Docker-ga
 make verify-s01        # assert compose health plus backend/frontend smoke checks
 make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
 make verify-s03        # prove audited sensitive access plus fail-closed denial and persisted audit rows
+make verify-milestone  # run the canonical compose-backed milestone proof in S02 -> S03 order
 make down              # stop the stack
 ```
 
@@ -124,6 +125,8 @@ bash scripts/verify-s03.sh
 2. authenticated access to the audited sensitive route succeeds and returns the expected operation/audit payload,
 3. a logged-out or invalidated session is denied with the same machine-readable auth contract while still persisting a denial audit row, and
 4. PostgreSQL contains the matching success and denial `audit_events` rows keyed by correlation/request identifiers so missing persistence cannot look like success.
+
+`bash scripts/verify-milestone.sh` is the canonical milestone-level wrapper. It fails fast when Docker is unavailable so infrastructure gating is reported distinctly, prints a compose service snapshot, then runs the tracked S02 and S03 proofs in sequence without reimplementing their checks.
 
 ## Repository roadmap context
 

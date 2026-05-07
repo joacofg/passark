@@ -51,6 +51,7 @@ make quality-gates
 make verify-s01
 make verify-s02
 make verify-s03
+make verify-milestone
 make down
 ```
 
@@ -95,6 +96,7 @@ make quality-gates
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
+bash scripts/verify-milestone.sh
 ```
 
 The intent is to keep startup, auth, migration, and code-quality failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
@@ -104,8 +106,9 @@ The intent is to keep startup, auth, migration, and code-quality failures attrib
 - `verify-s01` checks baseline stack health and shell rendering.
 - `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend operator route copy for the `Operator shell`, backend-session loading state, and `Run vault access probe` affordance.
 - `verify-s03` extends the proof to the audited sensitive route, including persisted PostgreSQL audit evidence for success and invalidated-session denial.
+- `verify-milestone` is the canonical compose-backed milestone wrapper. It first treats Docker daemon availability as a hard infrastructure prerequisite, prints a compose snapshot for fast triage, and then runs `verify-s02` followed by `verify-s03` so auth flow failures and audit-persistence failures remain attributable.
 
-If Docker itself is unavailable, `make verify-s01`, `make verify-s02`, and `make verify-s03` fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
+If Docker itself is unavailable, `make verify-s01`, `make verify-s02`, `make verify-s03`, and `make verify-milestone` fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
 
 ## Integrated verification workflow
 
@@ -113,7 +116,7 @@ Use the fast host-side checks first, then escalate to compose-backed proof only 
 
 ```bash
 make quality-gates
-make verify-s03
+make verify-milestone
 ```
 
 If you need the underlying compose lifecycle explicitly, the equivalent security-proof sequence is:
@@ -122,11 +125,11 @@ If you need the underlying compose lifecycle explicitly, the equivalent security
 docker compose config
 docker compose up --build -d
 cd frontend && npm test -- --runInBand
-cd .. && bash scripts/verify-s03.sh
+cd .. && bash scripts/verify-milestone.sh
 docker compose down -v
 ```
 
-A healthy security verification run proves all of the following:
+A healthy milestone verification run proves all of the following:
 
 1. Compose renders and the three services are healthy.
 2. `/api/v1/health` returns the expected backend payload.
