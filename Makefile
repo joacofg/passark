@@ -1,7 +1,10 @@
 SHELL := /bin/bash
 COMPOSE := docker compose
+BACKEND_PYTHON ?= python3
+BACKEND_PYTEST := cd backend && $(BACKEND_PYTHON) -m pytest
+FRONTEND_NPM := npm --prefix frontend
 
-.PHONY: init up down ps logs logs-backend logs-frontend logs-postgres verify-s01 verify-s02 verify-s03 config
+.PHONY: init up down ps logs logs-backend logs-frontend logs-postgres verify-s01 verify-s02 verify-s03 config backend-migrate backend-test frontend-test frontend-lint quality-gates
 
 init:
 	@test -f .env || cp .env.example .env
@@ -45,10 +48,12 @@ backend-migrate:
 	$(COMPOSE) run --rm backend alembic upgrade head
 
 backend-test:
-	$(COMPOSE) run --rm backend pytest backend/tests/test_health.py backend/tests/test_config.py
+	$(BACKEND_PYTEST) tests/test_health.py tests/test_config.py tests/test_auth.py
 
 frontend-test:
-	$(COMPOSE) run --rm frontend npm test -- --runInBand
+	$(FRONTEND_NPM) test -- --runInBand
 
 frontend-lint:
-	$(COMPOSE) run --rm frontend npm run lint
+	$(FRONTEND_NPM) run lint
+
+quality-gates: backend-test frontend-test frontend-lint

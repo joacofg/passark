@@ -42,8 +42,10 @@ make logs-postgres
 make logs-backend
 make logs-frontend
 make backend-migrate
+make backend-test
 make frontend-test
 make frontend-lint
+make quality-gates
 make verify-s01
 make verify-s02
 make verify-s03
@@ -84,22 +86,35 @@ docker compose logs postgres
 docker compose logs backend
 docker compose logs frontend
 curl http://localhost:8000/api/v1/health
+make backend-test
+make frontend-test
+make frontend-lint
+make quality-gates
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
 ```
 
-The intent is to keep startup, auth, and migration failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
+The intent is to keep startup, auth, migration, and code-quality failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
+
+`make quality-gates` is the fast host-side regression sweep. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` without invoking Docker-gated proof.
 
 - `verify-s01` checks baseline stack health and shell rendering.
 - `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend route availability.
 - `verify-s03` extends the proof to the audited sensitive route, including persisted PostgreSQL audit evidence for success and invalidated-session denial.
 
-If Docker itself is unavailable, all verification scripts fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
+If Docker itself is unavailable, `make verify-s01`, `make verify-s02`, and `make verify-s03` fail fast with an explicit daemon error so infrastructure issues are distinguished from backend or frontend regressions.
 
 ## Integrated verification workflow
 
-Run the slice proof with the same commands expected by the task contract:
+Use the fast host-side checks first, then escalate to compose-backed proof only when needed:
+
+```bash
+make quality-gates
+make verify-s03
+```
+
+If you need the underlying compose lifecycle explicitly, the equivalent security-proof sequence is:
 
 ```bash
 docker compose config

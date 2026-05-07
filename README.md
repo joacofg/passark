@@ -46,8 +46,10 @@ make logs-postgres     # inspect database startup and readiness
 make logs-backend      # inspect API boot, migrations, auth, or audit failures
 make logs-frontend     # inspect Next.js boot and runtime issues
 make backend-migrate   # run Alembic migrations inside the backend container
-make frontend-test     # run tracked frontend tests in the frontend container
-make frontend-lint     # run tracked frontend lint in the frontend container
+make backend-test      # run backend auth/config/health tests on the host
+make frontend-test     # run tracked frontend tests on the host
+make frontend-lint     # run tracked frontend lint on the host
+make quality-gates     # run the fast host-side quality checks without Docker-gated proof
 make verify-s01        # assert compose health plus backend/frontend smoke checks
 make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
 make verify-s03        # prove audited sensitive access plus fail-closed denial and persisted audit rows
@@ -96,10 +98,16 @@ docker compose logs backend
 docker compose logs frontend
 docker compose logs postgres
 curl http://localhost:8000/api/v1/health
+make backend-test
+make frontend-test
+make frontend-lint
+make quality-gates
 bash scripts/verify-s01.sh
 bash scripts/verify-s02.sh
 bash scripts/verify-s03.sh
 ```
+
+`make quality-gates` is the supported fast host-side aggregate. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` in sequence without invoking Docker-gated verification implicitly.
 
 `bash scripts/verify-s01.sh` renders the compose config, prints `docker compose ps`, validates all three services report `healthy`, echoes the backend health payload, and confirms the frontend responds with the documented app shell plus backend seam.
 
