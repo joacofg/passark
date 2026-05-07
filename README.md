@@ -28,6 +28,8 @@ The canonical workflow uses `docker compose` and root `make` targets.
 
 - Docker with Compose support
 - GNU Make
+- Python 3 with backend dependencies installed locally for `make backend-test`
+- Node.js/npm with frontend dependencies installed locally for `make frontend-test` and `make frontend-lint`
 
 ### Setup
 

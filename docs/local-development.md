@@ -25,11 +25,16 @@ The repository assumes:
    ```bash
    cp .env.example .env
    ```
-2. Initialize local folders and defaults:
+2. Install host-side dependencies used by `make quality-gates`:
+   ```bash
+   pip install -e backend
+   npm --prefix frontend install
+   ```
+3. Initialize local folders and defaults:
    ```bash
    make init
    ```
-3. Inspect the rendered compose configuration:
+4. Inspect the rendered compose configuration:
    ```bash
    make config
    ```
@@ -102,6 +107,8 @@ bash scripts/verify-milestone.sh
 The intent is to keep startup, auth, migration, and code-quality failures attributable to the failing service or command rather than hidden in ad-hoc orchestration.
 
 `make quality-gates` is the fast host-side regression sweep. It runs `make backend-test`, `make frontend-test`, and `make frontend-lint` without invoking compose-backed proof.
+
+Because `quality-gates` runs on the host, it assumes the backend Python package set and frontend npm dependencies are already installed locally. Missing host dependencies are environment/setup failures, not evidence that the compose-backed runtime contract regressed.
 
 - `verify-s01` checks baseline stack health and shell rendering.
 - `verify-s02` extends that proof with anonymous protected-access rejection, bootstrap login success, authenticated protected access, and frontend operator route copy for the `Operator shell`, backend-session loading state, and `Run vault access probe` affordance.
