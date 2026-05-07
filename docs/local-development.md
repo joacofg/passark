@@ -4,6 +4,8 @@
 
 This document defines the canonical local workflow for the PassArk monorepo foundation established in M001/S01 and extended with the local auth baseline in M001/S02.
 
+For the exact implemented security posture behind those commands — including the cookie-session auth model, audited `vault-access-probe` route, stable denial codes, persisted `audit_events` evidence, and explicit non-goals — see `docs/security-model.md`.
+
 The repository assumes:
 
 - one **single-company** deployment per installation

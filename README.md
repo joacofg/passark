@@ -134,4 +134,4 @@ This repo is intentionally being built foundation-first:
 3. frontend shell baseline
 4. integrated end-to-end local proof
 
-See `docs/local-development.md` for the local workflow expectations used by downstream slices.
+See `docs/local-development.md` for the local workflow expectations used by downstream slices, and `docs/security-model.md` for the implemented auth baseline, audited sensitive-route contract, stable denial codes, and explicit security non-goals.
