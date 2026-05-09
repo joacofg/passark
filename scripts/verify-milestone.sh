@@ -51,12 +51,11 @@ run_stage() {
   echo "==> ${label}"
   if bash "$script_path"; then
     echo "==> ${label} passed"
-    return 0
+  else
+    local exit_code=$?
+    echo "==> ${label} failed with exit code ${exit_code}" >&2
+    return "$exit_code"
   fi
-
-  local exit_code=$?
-  echo "==> ${label} failed with exit code ${exit_code}" >&2
-  return "$exit_code"
 }
 
 echo "==> Starting milestone integration verification"

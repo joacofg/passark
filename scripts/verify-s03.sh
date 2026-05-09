@@ -86,22 +86,39 @@ docker compose config >/dev/null
 echo "==> Inspecting service state"
 docker compose ps
 
-for service in postgres backend frontend; do
-  service_json="$(docker compose ps --format json "$service" 2>/dev/null || true)"
-  if [[ -z "$service_json" ]]; then
-    print_infra_failure "$service service is not running under docker compose."
-    exit 1
-  fi
+wait_for_service_health() {
+  local service="$1"
+  local timeout_seconds="${2:-120}"
+  local start_ts
+  start_ts="$(date +%s)"
 
-  service_health="$(printf '%s\n' "$service_json" | python3 -c 'import json,sys
+  while true; do
+    service_json="$(docker compose ps --format json "$service" 2>/dev/null || true)"
+    if [[ -z "$service_json" ]]; then
+      print_infra_failure "$service service is not running under docker compose."
+      return 1
+    fi
+
+    service_health="$(printf '%s\n' "$service_json" | python3 -c 'import json,sys
 rows=[json.loads(line) for line in sys.stdin if line.strip()]
 if not rows:
     raise SystemExit(1)
 print(rows[0].get("Health", ""))')"
-  if [[ "$service_health" != "healthy" ]]; then
-    print_infra_failure "$service service is not healthy (status: ${service_health:-unknown})."
-    exit 1
-  fi
+    if [[ "$service_health" == "healthy" ]]; then
+      return 0
+    fi
+
+    if (( $(date +%s) - start_ts >= timeout_seconds )); then
+      print_infra_failure "$service service is not healthy (status: ${service_health:-unknown})."
+      return 1
+    fi
+
+    sleep 2
+  done
+}
+
+for service in postgres backend frontend; do
+  wait_for_service_health "$service"
 done
 
 backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1"
@@ -213,9 +230,8 @@ printf '%s' "$(cat "$INVALID_BODY")" | python3 -c 'import json,sys; payload=json
 echo "==> Inspecting persisted audit evidence in PostgreSQL"
 if ! docker compose exec -T postgres \
   psql -U "${POSTGRES_USER:-passark}" -d "${POSTGRES_DB:-passark}" \
-  -v correlation_id="$CORRELATION_ID" \
   -At -F '|' \
-  -c "SELECT operation, outcome, reason_code, COALESCE(actor_user_id::text,''), COALESCE(correlation_id,''), COALESCE(request_id,''), metadata_json::text FROM audit_events WHERE correlation_id IN (:'correlation_id', :'correlation_id' || '-invalidated') ORDER BY id;" >"$DB_OUTPUT"; then
+  -c "SELECT operation, outcome, reason_code, COALESCE(actor_user_id::text,''), COALESCE(correlation_id,''), COALESCE(request_id,''), metadata_json::text FROM audit_events WHERE correlation_id IN ('${CORRELATION_ID}', '${CORRELATION_ID}-invalidated') ORDER BY id;" >"$DB_OUTPUT"; then
   echo "Failed to inspect persisted audit rows." >&2
   print_service_logs
   exit 1

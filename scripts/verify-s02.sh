@@ -70,22 +70,40 @@ docker compose config >/dev/null
 echo "==> Inspecting service state"
 docker compose ps
 
-postgres_status="$(docker compose ps --format json postgres | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
-backend_status="$(docker compose ps --format json backend | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
-frontend_status="$(docker compose ps --format json frontend | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+wait_for_service_health() {
+  local service="$1"
+  local timeout_seconds="${2:-120}"
+  local start_ts
+  start_ts="$(date +%s)"
 
-for pair in \
-  "postgres:$postgres_status" \
-  "backend:$backend_status" \
-  "frontend:$frontend_status"; do
-  service="${pair%%:*}"
-  status="${pair#*:}"
-  if [[ "$status" != "healthy" ]]; then
-    echo "$service service is not healthy (status: ${status:-unknown})." >&2
-    echo "Recent $service logs:" >&2
-    docker compose logs --tail=50 "$service" >&2 || true
-    exit 1
-  fi
+  while true; do
+    service_json="$(docker compose ps --format json "$service" 2>/dev/null || true)"
+    if [[ -z "$service_json" ]]; then
+      echo "$service service is not running under docker compose." >&2
+      echo "Infrastructure gating diagnostic follows." >&2
+      docker compose ps >&2 || true
+      docker compose logs --tail=50 "$service" >&2 || true
+      return 1
+    fi
+
+    service_health="$(printf '%s\n' "$service_json" | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+    if [[ "$service_health" == "healthy" ]]; then
+      return 0
+    fi
+
+    if (( $(date +%s) - start_ts >= timeout_seconds )); then
+      echo "$service service is not healthy (status: ${service_health:-unknown})." >&2
+      echo "Recent $service logs:" >&2
+      docker compose logs --tail=50 "$service" >&2 || true
+      return 1
+    fi
+
+    sleep 2
+  done
+}
+
+for service in postgres backend frontend; do
+  wait_for_service_health "$service"
 done
 
 backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1"
@@ -159,7 +177,7 @@ printf '%s' "$frontend_login" | grep -q "Authenticate with the local bootstrap o
 frontend_operator="$(curl --fail --silent --show-error "$frontend_url/operator")"
 printf '%s' "$frontend_operator" | grep -q "Checking backend session"
 printf '%s' "$frontend_operator" | grep -q "Operator shell"
-printf '%s' "$frontend_operator" | grep -q "Run vault access probe"
 printf '%s' "$frontend_operator" | grep -q "protected/whoami"
+printf '%s' "$frontend_operator" | grep -q "Protected operator boundary"
 
 echo "S02 integrated auth verification passed."
