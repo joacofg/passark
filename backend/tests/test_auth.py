@@ -17,6 +17,21 @@ def login_as_admin(client):
     return response
 
 
+def test_auth_login_preflight_allows_local_frontend_origin(client):
+    response = client.options(
+        "/api/v1/auth/login",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert response.headers["access-control-allow-credentials"] == "true"
+
+
 def test_login_sets_session_cookie_and_persists_session(client, db_session):
     response = login_as_admin(client)
 
