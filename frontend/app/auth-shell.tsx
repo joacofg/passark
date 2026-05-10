@@ -13,20 +13,34 @@ import {
   readProtectedWhoAmI,
 } from "@/lib/auth";
 import {
+  type App,
+  type AppCreateInput,
   type CatalogUser,
   type CatalogUserCreateInput,
   type CatalogUserUpdateInput,
   type CatalogWorkspaceData,
   type DirectRoleAssignment,
+  type Environment,
+  type EnvironmentCreateInput,
+  type Project,
+  type ProjectCreateInput,
+  type Resource,
+  type ResourceContainerType,
+  type ResourceCreateInput,
+  type ResourceType,
   type ScopedRole,
   type ScopedRoleCreateInput,
   type ScopedRoleScopeType,
   type Team,
   type TeamCreateInput,
   type TeamMembership,
+  createApp,
   createAssignment,
   createCatalogUser,
+  createEnvironment,
   createMembership,
+  createProject,
+  createResource,
   createScopedRole,
   createTeam,
   decodeCatalogError,
@@ -40,6 +54,22 @@ const DEFAULT_WORKSPACE_ERROR_MESSAGE =
   "Unable to load the operator catalog workspace right now.";
 const DEFAULT_MUTATION_ERROR_MESSAGE =
   "Unable to save the catalog change right now.";
+const RESOURCE_TYPE_OPTIONS: ResourceType[] = [
+  "database",
+  "bucket",
+  "queue",
+  "service_account",
+  "certificate",
+  "secret_ref",
+];
+
+const RESOURCE_SCOPE_OPTIONS: ScopedRoleScopeType[] = ["organization", "team"];
+
+const RESOURCE_CONTAINER_OPTIONS: ResourceContainerType[] = [
+  "app",
+  "project",
+  "environment",
+];
 
 type OperatorIdentityState =
   | { status: "loading" }
@@ -90,6 +120,34 @@ type MembershipFormState = {
 type AssignmentFormState = {
   scoped_role_id: string;
   catalog_user_id: string;
+};
+
+type AppFormState = {
+  name: string;
+  description: string;
+};
+
+type ProjectFormState = {
+  app_id: string;
+  name: string;
+  description: string;
+};
+
+type EnvironmentFormState = {
+  project_id: string;
+  name: string;
+  description: string;
+};
+
+type ResourceFormState = {
+  name: string;
+  resource_type: ResourceType;
+  container_type: ResourceContainerType;
+  container_id: string;
+  scope_type: ScopedRoleScopeType;
+  scope_id: string;
+  description: string;
+  metadata_summary: string;
 };
 
 type CatalogUserFormMode =
@@ -235,6 +293,42 @@ function emptyAssignmentForm(): AssignmentFormState {
   };
 }
 
+function emptyAppForm(): AppFormState {
+  return {
+    name: "",
+    description: "",
+  };
+}
+
+function emptyProjectForm(appId = ""): ProjectFormState {
+  return {
+    app_id: appId,
+    name: "",
+    description: "",
+  };
+}
+
+function emptyEnvironmentForm(projectId = ""): EnvironmentFormState {
+  return {
+    project_id: projectId,
+    name: "",
+    description: "",
+  };
+}
+
+function emptyResourceForm(organizationId = ""): ResourceFormState {
+  return {
+    name: "",
+    resource_type: "database",
+    container_type: "app",
+    container_id: "",
+    scope_type: "organization",
+    scope_id: organizationId,
+    description: "",
+    metadata_summary: "owner=platform\nrotation=manual",
+  };
+}
+
 function userFormFromCatalogUser(user: CatalogUser): CatalogUserFormState {
   return {
     email: user.email,
@@ -244,52 +338,26 @@ function userFormFromCatalogUser(user: CatalogUser): CatalogUserFormState {
   };
 }
 
-function OperatorIdentitySummary({
-  user,
-  sessionId,
-}: {
-  user: AuthenticatedUser;
-  sessionId: number;
-}) {
-  return (
-    <section className="status-grid" aria-label="Protected operator details">
-      <article className="status-card">
-        <h2>Authenticated user</h2>
-        <p>{user.email}</p>
-        <span>User ID {user.id}</span>
-      </article>
-      <article className="status-card">
-        <h2>Session record</h2>
-        <p>Session #{sessionId}</p>
-        <span>Resolved from the backend protected endpoint.</span>
-      </article>
-      <article className="status-card">
-        <h2>Account state</h2>
-        <p>{user.is_active ? "Active" : "Inactive"}</p>
-        <span>Protected catalog reads only render after session validation succeeds.</span>
-      </article>
-    </section>
-  );
+function parseMetadataSummary(summary: string): Record<string, string> {
+  const entries = summary
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex === -1) {
+        return [line, ""] as const;
+      }
+      return [line.slice(0, separatorIndex), line.slice(separatorIndex + 1)] as const;
+    });
+
+  return Object.fromEntries(entries);
 }
 
-function NoticeBlock({ notice }: { notice: MutationNotice }) {
-  if (!notice) {
-    return null;
-  }
-
-  return (
-    <div
-      className={
-        notice.tone === "success"
-          ? "inline-notice inline-notice--success"
-          : "inline-notice inline-notice--error"
-      }
-      role={notice.tone === "success" ? "status" : "alert"}
-    >
-      <p>{notice.message}</p>
-      {notice.tone === "error" && notice.code ? <p>Failure code: {notice.code}</p> : null}
-    </div>
-  );
+function formatMetadataSummary(metadata: Record<string, string>): string {
+  return Object.entries(metadata)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
 }
 
 function resolveScopeLabel(role: ScopedRole, teams: Team[]): string {
@@ -319,6 +387,40 @@ function resolveTeamName(teamId: string, teams: Team[]): string {
 
 function resolveRoleName(roleId: string, roles: ScopedRole[]): string {
   return roles.find((role) => role.id === roleId)?.name ?? roleId;
+}
+
+function resolveAppName(appId: string, apps: App[]): string {
+  return apps.find((app) => app.id === appId)?.name ?? appId;
+}
+
+function resolveProjectName(projectId: string, projects: Project[]): string {
+  return projects.find((project) => project.id === projectId)?.name ?? projectId;
+}
+
+function resolveEnvironmentName(environmentId: string, environments: Environment[]): string {
+  return environments.find((environment) => environment.id === environmentId)?.name ?? environmentId;
+}
+
+function resolveResourceContainerLabel(
+  resource: Resource,
+  apps: App[],
+  projects: Project[],
+  environments: Environment[],
+): string {
+  if (resource.container_type === "app") {
+    return `App · ${resolveAppName(resource.container_id, apps)}`;
+  }
+  if (resource.container_type === "project") {
+    return `Project · ${resolveProjectName(resource.container_id, projects)}`;
+  }
+  return `Environment · ${resolveEnvironmentName(resource.container_id, environments)}`;
+}
+
+function resolveResourceScopeLabel(resource: Resource, organizationId: string, teams: Team[]): string {
+  if (resource.scope_type === "organization" && resource.scope_id === organizationId) {
+    return "Organization";
+  }
+  return `Team · ${resolveTeamName(resource.scope_id, teams)}`;
 }
 
 function OrganizationPanel({
@@ -380,6 +482,54 @@ function OrganizationPanel({
         <NoticeBlock notice={notice} />
       </form>
     </section>
+  );
+}
+
+function OperatorIdentitySummary({
+  user,
+  sessionId,
+}: {
+  user: AuthenticatedUser;
+  sessionId: number;
+}) {
+  return (
+    <section className="status-grid" aria-label="Protected operator details">
+      <article className="status-card">
+        <h2>Authenticated user</h2>
+        <p>{user.email}</p>
+        <span>User ID {user.id}</span>
+      </article>
+      <article className="status-card">
+        <h2>Session record</h2>
+        <p>Session #{sessionId}</p>
+        <span>Resolved from the backend protected endpoint.</span>
+      </article>
+      <article className="status-card">
+        <h2>Account state</h2>
+        <p>{user.is_active ? "Active" : "Inactive"}</p>
+        <span>Protected catalog reads only render after session validation succeeds.</span>
+      </article>
+    </section>
+  );
+}
+
+function NoticeBlock({ notice }: { notice: MutationNotice }) {
+  if (!notice) {
+    return null;
+  }
+
+  return (
+    <div
+      className={
+        notice.tone === "success"
+          ? "inline-notice inline-notice--success"
+          : "inline-notice inline-notice--error"
+      }
+      role={notice.tone === "success" ? "status" : "alert"}
+    >
+      <p>{notice.message}</p>
+      {notice.tone === "error" && notice.code ? <p>Failure code: {notice.code}</p> : null}
+    </div>
   );
 }
 
@@ -969,6 +1119,530 @@ function AssignmentsPanel({
   );
 }
 
+function AppsPanel({
+  apps,
+  projects,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  apps: App[];
+  projects: Project[];
+  form: AppFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: AppFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Applications workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Application catalog</p>
+          <h2>Applications</h2>
+          <p className="workspace-copy">
+            Register top-level application records that anchor projects, environments, and typed resources.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {apps.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No applications yet</h3>
+              <p>Create the first application root for the operator-visible hierarchy.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Applications list">
+              {apps.map((app) => (
+                <li className="catalog-user-item" key={app.id}>
+                  <div>
+                    <h3>{app.name}</h3>
+                    <p>{app.description ?? "No description"}</p>
+                    <span>
+                      {projects.filter((project) => project.app_id === app.id).length} projects
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create application</h3>
+
+          <label className="field">
+            <span>Application name</span>
+            <input
+              name="app_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Application description</span>
+            <textarea
+              className="field-textarea"
+              name="app_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving ? "Creating application…" : "Create application"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function ProjectsPanel({
+  apps,
+  projects,
+  environments,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  apps: App[];
+  projects: Project[];
+  environments: Environment[];
+  form: ProjectFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: ProjectFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Projects workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Hierarchy middle tier</p>
+          <h2>Projects</h2>
+          <p className="workspace-copy">
+            Create projects only under real applications so environment and resource creation stay properly scoped.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {projects.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No projects yet</h3>
+              <p>Create an application first, then add its projects here.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Projects list">
+              {projects.map((project) => (
+                <li className="catalog-user-item" key={project.id}>
+                  <div>
+                    <h3>{project.name}</h3>
+                    <p>{project.description ?? "No description"}</p>
+                    <span>
+                      {resolveAppName(project.app_id, apps)} · {environments.filter((environment) => environment.project_id === project.id).length} environments
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create project</h3>
+
+          <label className="field">
+            <span>Application</span>
+            <select
+              name="project_app_id"
+              onChange={(event) => onChange({ ...form, app_id: event.target.value })}
+              required
+              value={form.app_id}
+            >
+              <option value="">Select an application</option>
+              {apps.map((app) => (
+                <option key={app.id} value={app.id}>
+                  {app.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Project name</span>
+            <input
+              name="project_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Project description</span>
+            <textarea
+              className="field-textarea"
+              name="project_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving || apps.length === 0} type="submit">
+              {isSaving ? "Creating project…" : "Create project"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function EnvironmentsPanel({
+  projects,
+  environments,
+  resources,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  projects: Project[];
+  environments: Environment[];
+  resources: Resource[];
+  form: EnvironmentFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: EnvironmentFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Environments workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Deployment scopes</p>
+          <h2>Environments</h2>
+          <p className="workspace-copy">
+            Create environments under real projects so typed resources can link to a valid deployment container.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {environments.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No environments yet</h3>
+              <p>Create a project first, then add environments here.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Environments list">
+              {environments.map((environment) => (
+                <li className="catalog-user-item" key={environment.id}>
+                  <div>
+                    <h3>{environment.name}</h3>
+                    <p>{environment.description ?? "No description"}</p>
+                    <span>
+                      {resolveProjectName(environment.project_id, projects)} · {resources.filter((resource) => resource.environment_id === environment.id).length} resources
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create environment</h3>
+
+          <label className="field">
+            <span>Project</span>
+            <select
+              name="environment_project_id"
+              onChange={(event) => onChange({ ...form, project_id: event.target.value })}
+              required
+              value={form.project_id}
+            >
+              <option value="">Select a project</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Environment name</span>
+            <input
+              name="environment_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Environment description</span>
+            <textarea
+              className="field-textarea"
+              name="environment_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving || projects.length === 0} type="submit">
+              {isSaving ? "Creating environment…" : "Create environment"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function ResourcesPanel({
+  organizationId,
+  teams,
+  apps,
+  projects,
+  environments,
+  resources,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  organizationId: string;
+  teams: Team[];
+  apps: App[];
+  projects: Project[];
+  environments: Environment[];
+  resources: Resource[];
+  form: ResourceFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: ResourceFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const containerOptions =
+    form.container_type === "app"
+      ? apps.map((app) => ({ value: app.id, label: app.name }))
+      : form.container_type === "project"
+        ? projects.map((project) => ({ value: project.id, label: project.name }))
+        : environments.map((environment) => ({ value: environment.id, label: environment.name }));
+
+  const scopeOptions =
+    form.scope_type === "organization"
+      ? [{ value: organizationId, label: "Organization root" }]
+      : teams.map((team) => ({ value: team.id, label: team.name }));
+
+  return (
+    <section className="workspace-card" aria-label="Resources workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Typed sensitive metadata</p>
+          <h2>Resources</h2>
+          <p className="workspace-copy">
+            Register descriptive typed resource metadata linked to the catalog graph without storing secret payloads.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {resources.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No resources yet</h3>
+              <p>Create an app, project, or environment first, then attach typed metadata here.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Resources list">
+              {resources.map((resource) => (
+                <li className="catalog-user-item" key={resource.id}>
+                  <div>
+                    <h3>{resource.name}</h3>
+                    <p>{resource.description ?? "No description"}</p>
+                    <span>
+                      {resource.resource_type} · {resolveResourceContainerLabel(resource, apps, projects, environments)} · {resolveResourceScopeLabel(resource, organizationId, teams)}
+                    </span>
+                    <small>{formatMetadataSummary(resource.metadata)}</small>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create resource</h3>
+
+          <label className="field">
+            <span>Resource name</span>
+            <input
+              name="resource_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Resource type</span>
+            <select
+              name="resource_type"
+              onChange={(event) => onChange({ ...form, resource_type: event.target.value as ResourceType })}
+              value={form.resource_type}
+            >
+              {RESOURCE_TYPE_OPTIONS.map((resourceType) => (
+                <option key={resourceType} value={resourceType}>
+                  {resourceType}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Container type</span>
+            <select
+              name="container_type"
+              onChange={(event) =>
+                onChange({
+                  ...form,
+                  container_type: event.target.value as ResourceContainerType,
+                  container_id: "",
+                })
+              }
+              value={form.container_type}
+            >
+              {RESOURCE_CONTAINER_OPTIONS.map((containerType) => (
+                <option key={containerType} value={containerType}>
+                  {containerType}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Container target</span>
+            <select
+              name="container_id"
+              onChange={(event) => onChange({ ...form, container_id: event.target.value })}
+              required
+              value={form.container_id}
+            >
+              <option value="">Select a {form.container_type}</option>
+              {containerOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Scope type</span>
+            <select
+              name="resource_scope_type"
+              onChange={(event) =>
+                onChange({
+                  ...form,
+                  scope_type: event.target.value as ScopedRoleScopeType,
+                  scope_id: event.target.value === "organization" ? organizationId : "",
+                })
+              }
+              value={form.scope_type}
+            >
+              {RESOURCE_SCOPE_OPTIONS.map((scopeType) => (
+                <option key={scopeType} value={scopeType}>
+                  {scopeType}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Scope target</span>
+            <select
+              name="resource_scope_id"
+              onChange={(event) => onChange({ ...form, scope_id: event.target.value })}
+              required
+              value={form.scope_id}
+            >
+              {scopeOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Resource description</span>
+            <textarea
+              className="field-textarea"
+              name="resource_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <label className="field">
+            <span>Metadata summary</span>
+            <textarea
+              className="field-textarea"
+              name="metadata_summary"
+              onChange={(event) => onChange({ ...form, metadata_summary: event.target.value })}
+              rows={4}
+              value={form.metadata_summary}
+            />
+          </label>
+
+          <div className="workspace-form__actions">
+            <button
+              className="button button--primary"
+              disabled={isSaving || containerOptions.length === 0 || scopeOptions.length === 0}
+              type="submit"
+            >
+              {isSaving ? "Creating resource…" : "Create resource"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
 export function OperatorShell() {
   const router = useRouter();
   const [identityState, setIdentityState] = useState<OperatorIdentityState>({ status: "loading" });
@@ -989,12 +1663,24 @@ export function OperatorShell() {
   const [membershipNotice, setMembershipNotice] = useState<MutationNotice>(null);
   const [assignmentForm, setAssignmentForm] = useState<AssignmentFormState>(emptyAssignmentForm());
   const [assignmentNotice, setAssignmentNotice] = useState<MutationNotice>(null);
+  const [appForm, setAppForm] = useState<AppFormState>(emptyAppForm());
+  const [appNotice, setAppNotice] = useState<MutationNotice>(null);
+  const [projectForm, setProjectForm] = useState<ProjectFormState>(emptyProjectForm());
+  const [projectNotice, setProjectNotice] = useState<MutationNotice>(null);
+  const [environmentForm, setEnvironmentForm] = useState<EnvironmentFormState>(emptyEnvironmentForm());
+  const [environmentNotice, setEnvironmentNotice] = useState<MutationNotice>(null);
+  const [resourceForm, setResourceForm] = useState<ResourceFormState>(emptyResourceForm());
+  const [resourceNotice, setResourceNotice] = useState<MutationNotice>(null);
   const [isSavingOrganization, setIsSavingOrganization] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [isSavingTeam, setIsSavingTeam] = useState(false);
   const [isSavingRole, setIsSavingRole] = useState(false);
   const [isSavingMembership, setIsSavingMembership] = useState(false);
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
+  const [isSavingApp, setIsSavingApp] = useState(false);
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [isSavingEnvironment, setIsSavingEnvironment] = useState(false);
+  const [isSavingResource, setIsSavingResource] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const authenticatedPayload =
@@ -1020,6 +1706,29 @@ export function OperatorShell() {
           current.scope_type === "organization"
             ? data.organization.id
             : current.scope_id,
+      }));
+      setProjectForm((current) => ({
+        ...current,
+        app_id: current.app_id || data.apps[0]?.id || "",
+      }));
+      setEnvironmentForm((current) => ({
+        ...current,
+        project_id: current.project_id || data.projects[0]?.id || "",
+      }));
+      setResourceForm((current) => ({
+        ...current,
+        scope_id:
+          current.scope_type === "organization"
+            ? data.organization.id
+            : current.scope_id,
+        container_id:
+          current.container_id ||
+          (current.container_type === "app"
+            ? data.apps[0]?.id
+            : current.container_type === "project"
+              ? data.projects[0]?.id
+              : data.environments[0]?.id) ||
+          "",
       }));
       if (userMode.mode === "create") {
         setUserForm(emptyUserForm());
@@ -1310,14 +2019,138 @@ export function OperatorShell() {
     }
   }
 
+  async function handleAppSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingApp(true);
+    setAppNotice(null);
+
+    try {
+      const payload: AppCreateInput = {
+        name: appForm.name,
+        description: appForm.description,
+      };
+      const response = await createApp(payload);
+      setAppNotice({
+        tone: "success",
+        message: `Application ${response.app.name} created successfully.`,
+      });
+      setAppForm(emptyAppForm());
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setAppNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingApp(false);
+    }
+  }
+
+  async function handleProjectSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingProject(true);
+    setProjectNotice(null);
+
+    try {
+      const payload: ProjectCreateInput = {
+        app_id: projectForm.app_id,
+        name: projectForm.name,
+        description: projectForm.description,
+      };
+      const response = await createProject(payload);
+      setProjectNotice({
+        tone: "success",
+        message: `Project ${response.project.name} created successfully.`,
+      });
+      setProjectForm(emptyProjectForm(projectForm.app_id));
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setProjectNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingProject(false);
+    }
+  }
+
+  async function handleEnvironmentSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingEnvironment(true);
+    setEnvironmentNotice(null);
+
+    try {
+      const payload: EnvironmentCreateInput = {
+        project_id: environmentForm.project_id,
+        name: environmentForm.name,
+        description: environmentForm.description,
+      };
+      const response = await createEnvironment(payload);
+      setEnvironmentNotice({
+        tone: "success",
+        message: `Environment ${response.environment.name} created successfully.`,
+      });
+      setEnvironmentForm(emptyEnvironmentForm(environmentForm.project_id));
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setEnvironmentNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingEnvironment(false);
+    }
+  }
+
+  async function handleResourceSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingResource(true);
+    setResourceNotice(null);
+
+    try {
+      const payload: ResourceCreateInput = {
+        name: resourceForm.name,
+        resource_type: resourceForm.resource_type,
+        container_type: resourceForm.container_type,
+        container_id: resourceForm.container_id,
+        scope_type: resourceForm.scope_type,
+        scope_id: resourceForm.scope_id,
+        description: resourceForm.description,
+        metadata: parseMetadataSummary(resourceForm.metadata_summary),
+      };
+      const response = await createResource(payload);
+      setResourceNotice({
+        tone: "success",
+        message: `Resource ${response.resource.name} created successfully.`,
+      });
+      setResourceForm(emptyResourceForm(workspaceData?.organization.id ?? ""));
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setResourceNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingResource(false);
+    }
+  }
+
   return (
     <section className="hero-card app-shell__hero">
       <p className="eyebrow">Protected operator boundary</p>
       <h1>Operator catalog workspace</h1>
       <p className="lede">
         This workspace validates the backend session first, then loads the single
-        organization root, real catalog users, team containers, scoped roles,
-        memberships, and direct role assignments from the protected catalog API.
+        organization root, people and team relationships, and the application → project →
+        environment → typed resource hierarchy from the protected catalog API.
         Auth expiry redirects back to sign-in, while validation, conflict,
         not-found, and scope mismatch failures stay visible here for operator diagnosis.
       </p>
@@ -1373,8 +2206,8 @@ export function OperatorShell() {
               <h2>Catalog contract</h2>
               <p>
                 The frontend only renders catalog data after the backend-owned
-                session resolves, then calls the protected organization, team,
-                role, membership, assignment, and user endpoints through a typed client.
+                session resolves, then calls the protected organization, user, team,
+                role, app, project, environment, and resource endpoints through a typed client.
               </p>
             </article>
             <article className="dashboard-card">
@@ -1391,8 +2224,8 @@ export function OperatorShell() {
             <div className="workspace-card" role="status">
               <h2>Loading catalog workspace…</h2>
               <p className="workspace-copy">
-                Fetching the organization root, users, teams, scoped roles, memberships,
-                and assignments from the backend.
+                Fetching the organization root, people graph, and application hierarchy
+                records from the backend.
               </p>
             </div>
           ) : null}
@@ -1471,6 +2304,52 @@ export function OperatorShell() {
                 roles={workspaceData.scoped_roles}
                 teams={workspaceData.teams}
                 users={workspaceData.users}
+              />
+
+              <AppsPanel
+                apps={workspaceData.apps}
+                form={appForm}
+                isSaving={isSavingApp}
+                notice={appNotice}
+                onChange={setAppForm}
+                onSubmit={handleAppSubmit}
+                projects={workspaceData.projects}
+              />
+
+              <ProjectsPanel
+                apps={workspaceData.apps}
+                environments={workspaceData.environments}
+                form={projectForm}
+                isSaving={isSavingProject}
+                notice={projectNotice}
+                onChange={setProjectForm}
+                onSubmit={handleProjectSubmit}
+                projects={workspaceData.projects}
+              />
+
+              <EnvironmentsPanel
+                environments={workspaceData.environments}
+                form={environmentForm}
+                isSaving={isSavingEnvironment}
+                notice={environmentNotice}
+                onChange={setEnvironmentForm}
+                onSubmit={handleEnvironmentSubmit}
+                projects={workspaceData.projects}
+                resources={workspaceData.resources}
+              />
+
+              <ResourcesPanel
+                apps={workspaceData.apps}
+                environments={workspaceData.environments}
+                form={resourceForm}
+                isSaving={isSavingResource}
+                notice={resourceNotice}
+                onChange={setResourceForm}
+                onSubmit={handleResourceSubmit}
+                organizationId={workspaceData.organization.id}
+                projects={workspaceData.projects}
+                resources={workspaceData.resources}
+                teams={workspaceData.teams}
               />
             </div>
           ) : null}

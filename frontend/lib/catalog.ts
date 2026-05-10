@@ -59,6 +59,63 @@ export type DirectRoleAssignment = {
   created_at: string;
 };
 
+export type App = {
+  id: string;
+  organization_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Project = {
+  id: string;
+  organization_id: string;
+  app_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Environment = {
+  id: string;
+  organization_id: string;
+  project_id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResourceType =
+  | "database"
+  | "bucket"
+  | "queue"
+  | "service_account"
+  | "certificate"
+  | "secret_ref";
+
+export type ResourceContainerType = "app" | "project" | "environment";
+
+export type Resource = {
+  id: string;
+  organization_id: string;
+  app_id: string | null;
+  project_id: string | null;
+  environment_id: string | null;
+  name: string;
+  resource_type: ResourceType;
+  container_type: ResourceContainerType;
+  container_id: string;
+  scope_type: ScopedRoleScopeType;
+  scope_id: string;
+  description: string | null;
+  metadata: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+};
+
 export type OrganizationUpdateResponse = {
   organization: Organization;
   audit_event_id: number;
@@ -85,6 +142,22 @@ export type DirectRoleAssignmentMutationResponse = {
   assignment: DirectRoleAssignment;
 };
 
+export type AppMutationResponse = {
+  app: App;
+};
+
+export type ProjectMutationResponse = {
+  project: Project;
+};
+
+export type EnvironmentMutationResponse = {
+  environment: Environment;
+};
+
+export type ResourceMutationResponse = {
+  resource: Resource;
+};
+
 export type CatalogWorkspaceData = {
   organization: Organization;
   users: CatalogUser[];
@@ -92,6 +165,10 @@ export type CatalogWorkspaceData = {
   scoped_roles: ScopedRole[];
   memberships: TeamMembership[];
   assignments: DirectRoleAssignment[];
+  apps: App[];
+  projects: Project[];
+  environments: Environment[];
+  resources: Resource[];
 };
 
 export type CatalogApiErrorCode =
@@ -107,6 +184,17 @@ export type CatalogApiErrorCode =
   | "team_membership_conflict"
   | "direct_role_assignment_conflict"
   | "scoped_role_scope_mismatch"
+  | "app_conflict"
+  | "app_not_found"
+  | "project_conflict"
+  | "project_not_found"
+  | "environment_conflict"
+  | "environment_not_found"
+  | "resource_conflict"
+  | "resource_not_found"
+  | "resource_scope_mismatch"
+  | "resource_container_mismatch"
+  | "resource_secret_payload_forbidden"
   | "unknown_catalog_error";
 
 export type CatalogApiErrorKind =
@@ -178,6 +266,34 @@ export type DirectRoleAssignmentCreateInput = {
   catalog_user_id: string;
 };
 
+export type AppCreateInput = {
+  name: string;
+  description: string;
+};
+
+export type ProjectCreateInput = {
+  app_id: string;
+  name: string;
+  description: string;
+};
+
+export type EnvironmentCreateInput = {
+  project_id: string;
+  name: string;
+  description: string;
+};
+
+export type ResourceCreateInput = {
+  name: string;
+  resource_type: ResourceType;
+  container_type: ResourceContainerType;
+  container_id: string;
+  scope_type: ScopedRoleScopeType;
+  scope_id: string;
+  description: string;
+  metadata: Record<string, string>;
+};
+
 export type DecodedCatalogError = {
   message: string;
   code: CatalogApiErrorCode;
@@ -230,83 +346,38 @@ export function decodeCatalogError(error: unknown): DecodedCatalogError {
   }
 
   if (error instanceof AuthApiRequestError) {
+    const conflictCodes: CatalogApiErrorCode[] = [
+      "catalog_user_conflict",
+      "team_conflict",
+      "scoped_role_conflict",
+      "team_membership_conflict",
+      "direct_role_assignment_conflict",
+      "app_conflict",
+      "project_conflict",
+      "environment_conflict",
+      "resource_conflict",
+    ];
+    const notFoundCodes: CatalogApiErrorCode[] = [
+      "catalog_user_not_found",
+      "team_not_found",
+      "scoped_role_not_found",
+      "app_not_found",
+      "project_not_found",
+      "environment_not_found",
+      "resource_not_found",
+    ];
+    const validationCodes: CatalogApiErrorCode[] = [
+      "scoped_role_scope_mismatch",
+      "resource_scope_mismatch",
+      "resource_container_mismatch",
+      "resource_secret_payload_forbidden",
+    ];
+
     if (error.status === 401 && error.code === "auth_unauthenticated") {
       return {
         message: error.message,
         code: "auth_unauthenticated",
         kind: "auth",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 409 && error.code === "catalog_user_conflict") {
-      return {
-        message: error.message,
-        code: "catalog_user_conflict",
-        kind: "conflict",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 409 && error.code === "team_conflict") {
-      return {
-        message: error.message,
-        code: "team_conflict",
-        kind: "conflict",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 409 && error.code === "scoped_role_conflict") {
-      return {
-        message: error.message,
-        code: "scoped_role_conflict",
-        kind: "conflict",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 409 && error.code === "team_membership_conflict") {
-      return {
-        message: error.message,
-        code: "team_membership_conflict",
-        kind: "conflict",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 409 && error.code === "direct_role_assignment_conflict") {
-      return {
-        message: error.message,
-        code: "direct_role_assignment_conflict",
-        kind: "conflict",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 404 && error.code === "catalog_user_not_found") {
-      return {
-        message: error.message,
-        code: "catalog_user_not_found",
-        kind: "not_found",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 404 && error.code === "team_not_found") {
-      return {
-        message: error.message,
-        code: "team_not_found",
-        kind: "not_found",
-        status: error.status,
-      };
-    }
-
-    if (error.status === 404 && error.code === "scoped_role_not_found") {
-      return {
-        message: error.message,
-        code: "scoped_role_not_found",
-        kind: "not_found",
         status: error.status,
       };
     }
@@ -323,10 +394,31 @@ export function decodeCatalogError(error: unknown): DecodedCatalogError {
       };
     }
 
-    if (error.status === 422 && error.code === "scoped_role_scope_mismatch") {
+    if (error.status === 409 && conflictCodes.includes(error.code as CatalogApiErrorCode)) {
       return {
         message: error.message,
-        code: "scoped_role_scope_mismatch",
+        code: error.code as CatalogApiErrorCode,
+        kind: "conflict",
+        status: error.status,
+      };
+    }
+
+    if (error.status === 404 && notFoundCodes.includes(error.code as CatalogApiErrorCode)) {
+      return {
+        message: error.message,
+        code: error.code as CatalogApiErrorCode,
+        kind: "not_found",
+        status: error.status,
+      };
+    }
+
+    if (
+      error.status === 422 &&
+      validationCodes.includes(error.code as CatalogApiErrorCode)
+    ) {
+      return {
+        message: error.message,
+        code: error.code as CatalogApiErrorCode,
         kind: "validation",
         status: error.status,
       };
@@ -504,16 +596,96 @@ export async function createAssignment(
   });
 }
 
+export async function listApps(): Promise<App[]> {
+  const response = await catalogJsonFetch<{ items: App[] }>("/catalog/apps", {
+    method: "GET",
+    cache: "no-store",
+  });
+  return response.items;
+}
+
+export async function createApp(payload: AppCreateInput): Promise<AppMutationResponse> {
+  return catalogJsonFetch<AppMutationResponse>("/catalog/apps", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const response = await catalogJsonFetch<{ items: Project[] }>("/catalog/projects", {
+    method: "GET",
+    cache: "no-store",
+  });
+  return response.items;
+}
+
+export async function createProject(
+  payload: ProjectCreateInput,
+): Promise<ProjectMutationResponse> {
+  return catalogJsonFetch<ProjectMutationResponse>("/catalog/projects", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listEnvironments(): Promise<Environment[]> {
+  const response = await catalogJsonFetch<{ items: Environment[] }>("/catalog/environments", {
+    method: "GET",
+    cache: "no-store",
+  });
+  return response.items;
+}
+
+export async function createEnvironment(
+  payload: EnvironmentCreateInput,
+): Promise<EnvironmentMutationResponse> {
+  return catalogJsonFetch<EnvironmentMutationResponse>("/catalog/environments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listResources(): Promise<Resource[]> {
+  const response = await catalogJsonFetch<{ items: Resource[] }>("/catalog/resources", {
+    method: "GET",
+    cache: "no-store",
+  });
+  return response.items;
+}
+
+export async function createResource(
+  payload: ResourceCreateInput,
+): Promise<ResourceMutationResponse> {
+  return catalogJsonFetch<ResourceMutationResponse>("/catalog/resources", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function readCatalogWorkspace(): Promise<CatalogWorkspaceData> {
-  const [organization, users, teams, scoped_roles, memberships, assignments] =
-    await Promise.all([
-      readOrganization(),
-      listCatalogUsers(),
-      listTeams(),
-      listScopedRoles(),
-      listMemberships(),
-      listAssignments(),
-    ]);
+  const [
+    organization,
+    users,
+    teams,
+    scoped_roles,
+    memberships,
+    assignments,
+    apps,
+    projects,
+    environments,
+    resources,
+  ] = await Promise.all([
+    readOrganization(),
+    listCatalogUsers(),
+    listTeams(),
+    listScopedRoles(),
+    listMemberships(),
+    listAssignments(),
+    listApps(),
+    listProjects(),
+    listEnvironments(),
+    listResources(),
+  ]);
 
   return {
     organization,
@@ -522,5 +694,9 @@ export async function readCatalogWorkspace(): Promise<CatalogWorkspaceData> {
     scoped_roles,
     memberships,
     assignments,
+    apps,
+    projects,
+    environments,
+    resources,
   };
 }
