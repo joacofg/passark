@@ -1,6 +1,6 @@
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, MetaData, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, MetaData, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -65,6 +65,63 @@ class Session(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class Organization(Base):
+    __tablename__ = "organizations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    singleton_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    catalog_users: Mapped[list["CatalogUser"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+
+
+class CatalogUser(Base):
+    __tablename__ = "catalog_users"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "email", name="uq_catalog_users_organization_id_email"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    full_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    job_title: Mapped[str | None] = mapped_column(String(160))
+    is_active: Mapped[bool] = mapped_column(Boolean(), default=True, nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="catalog_users")
 
 
 class AuditEvent(Base):
