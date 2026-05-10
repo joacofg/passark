@@ -13,12 +13,22 @@ import {
   readProtectedWhoAmI,
 } from "@/lib/auth";
 import {
-  type CatalogApiError,
   type CatalogUser,
   type CatalogUserCreateInput,
   type CatalogUserUpdateInput,
   type CatalogWorkspaceData,
+  type DirectRoleAssignment,
+  type ScopedRole,
+  type ScopedRoleCreateInput,
+  type ScopedRoleScopeType,
+  type Team,
+  type TeamCreateInput,
+  type TeamMembership,
+  createAssignment,
   createCatalogUser,
+  createMembership,
+  createScopedRole,
+  createTeam,
   decodeCatalogError,
   readCatalogWorkspace,
   updateCatalogUser,
@@ -58,6 +68,28 @@ type CatalogUserFormState = {
   full_name: string;
   job_title: string;
   is_active: boolean;
+};
+
+type TeamFormState = {
+  name: string;
+  description: string;
+};
+
+type ScopedRoleFormState = {
+  name: string;
+  description: string;
+  scope_type: ScopedRoleScopeType;
+  scope_id: string;
+};
+
+type MembershipFormState = {
+  team_id: string;
+  catalog_user_id: string;
+};
+
+type AssignmentFormState = {
+  scoped_role_id: string;
+  catalog_user_id: string;
 };
 
 type CatalogUserFormMode =
@@ -173,6 +205,36 @@ function emptyUserForm(): CatalogUserFormState {
   };
 }
 
+function emptyTeamForm(): TeamFormState {
+  return {
+    name: "",
+    description: "",
+  };
+}
+
+function emptyRoleForm(organizationId = ""): ScopedRoleFormState {
+  return {
+    name: "",
+    description: "",
+    scope_type: "organization",
+    scope_id: organizationId,
+  };
+}
+
+function emptyMembershipForm(): MembershipFormState {
+  return {
+    team_id: "",
+    catalog_user_id: "",
+  };
+}
+
+function emptyAssignmentForm(): AssignmentFormState {
+  return {
+    scoped_role_id: "",
+    catalog_user_id: "",
+  };
+}
+
 function userFormFromCatalogUser(user: CatalogUser): CatalogUserFormState {
   return {
     email: user.email,
@@ -208,6 +270,55 @@ function OperatorIdentitySummary({
       </article>
     </section>
   );
+}
+
+function NoticeBlock({ notice }: { notice: MutationNotice }) {
+  if (!notice) {
+    return null;
+  }
+
+  return (
+    <div
+      className={
+        notice.tone === "success"
+          ? "inline-notice inline-notice--success"
+          : "inline-notice inline-notice--error"
+      }
+      role={notice.tone === "success" ? "status" : "alert"}
+    >
+      <p>{notice.message}</p>
+      {notice.tone === "error" && notice.code ? <p>Failure code: {notice.code}</p> : null}
+    </div>
+  );
+}
+
+function resolveScopeLabel(role: ScopedRole, teams: Team[]): string {
+  if (role.scope_type === "organization") {
+    return "Organization";
+  }
+
+  const team = teams.find((candidate) => candidate.id === role.scope_id);
+  return team ? `Team · ${team.name}` : `Team · ${role.scope_id}`;
+}
+
+function countMemberships(teamId: string, memberships: TeamMembership[]): number {
+  return memberships.filter((membership) => membership.team_id === teamId).length;
+}
+
+function countAssignments(roleId: string, assignments: DirectRoleAssignment[]): number {
+  return assignments.filter((assignment) => assignment.scoped_role_id === roleId).length;
+}
+
+function resolveUserName(userId: string, users: CatalogUser[]): string {
+  return users.find((user) => user.id === userId)?.full_name ?? userId;
+}
+
+function resolveTeamName(teamId: string, teams: Team[]): string {
+  return teams.find((team) => team.id === teamId)?.name ?? teamId;
+}
+
+function resolveRoleName(roleId: string, roles: ScopedRole[]): string {
+  return roles.find((role) => role.id === roleId)?.name ?? roleId;
 }
 
 function OrganizationPanel({
@@ -266,19 +377,7 @@ function OrganizationPanel({
           </button>
         </div>
 
-        {notice ? (
-          <div
-            className={
-              notice.tone === "success" ? "inline-notice inline-notice--success" : "inline-notice inline-notice--error"
-            }
-            role={notice.tone === "success" ? "status" : "alert"}
-          >
-            <p>{notice.message}</p>
-            {notice.tone === "error" && notice.code ? (
-              <p>Failure code: {notice.code}</p>
-            ) : null}
-          </div>
-        ) : null}
+        <NoticeBlock notice={notice} />
       </form>
     </section>
   );
@@ -423,19 +522,447 @@ function CatalogUsersPanel({
             </button>
           </div>
 
-          {notice ? (
-            <div
-              className={
-                notice.tone === "success" ? "inline-notice inline-notice--success" : "inline-notice inline-notice--error"
-              }
-              role={notice.tone === "success" ? "status" : "alert"}
-            >
-              <p>{notice.message}</p>
-              {notice.tone === "error" && notice.code ? (
-                <p>Failure code: {notice.code}</p>
-              ) : null}
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function TeamsPanel({
+  teams,
+  memberships,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  teams: Team[];
+  memberships: TeamMembership[];
+  form: TeamFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: TeamFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Teams workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Container catalog</p>
+          <h2>Teams</h2>
+          <p className="workspace-copy">
+            Create team containers that memberships and team-scoped roles can target.
+            Duplicate names stay visible with stable machine-readable conflict codes.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {teams.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No teams yet</h3>
+              <p>Create the first team container for scoped access relationships.</p>
             </div>
-          ) : null}
+          ) : (
+            <ul className="catalog-user-list" aria-label="Teams list">
+              {teams.map((team) => (
+                <li className="catalog-user-item" key={team.id}>
+                  <div>
+                    <h3>{team.name}</h3>
+                    <p>{team.description ?? "No description"}</p>
+                    <span>{countMemberships(team.id, memberships)} memberships</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create team</h3>
+
+          <label className="field">
+            <span>Team name</span>
+            <input
+              name="team_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Team description</span>
+            <textarea
+              className="field-textarea"
+              name="team_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving ? "Creating team…" : "Create team"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function RolesPanel({
+  roles,
+  teams,
+  assignments,
+  organizationId,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  roles: ScopedRole[];
+  teams: Team[];
+  assignments: DirectRoleAssignment[];
+  organizationId: string;
+  form: ScopedRoleFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: ScopedRoleFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const availableScopeId = form.scope_type === "organization" ? organizationId : form.scope_id;
+
+  return (
+    <section className="workspace-card" aria-label="Scoped roles workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Role catalog</p>
+          <h2>Scoped roles</h2>
+          <p className="workspace-copy">
+            Define organization and team-scoped roles against real catalog containers.
+            Invalid scope/container combinations preserve the backend failure code inline.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {roles.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No scoped roles yet</h3>
+              <p>Create a role before assigning direct role relationships.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Scoped roles list">
+              {roles.map((role) => (
+                <li className="catalog-user-item" key={role.id}>
+                  <div>
+                    <h3>{role.name}</h3>
+                    <p>{role.description ?? "No description"}</p>
+                    <span>
+                      {resolveScopeLabel(role, teams)} · {countAssignments(role.id, assignments)} assignments
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create scoped role</h3>
+
+          <label className="field">
+            <span>Role name</span>
+            <input
+              name="role_name"
+              onChange={(event) => onChange({ ...form, name: event.target.value })}
+              required
+              value={form.name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Role description</span>
+            <textarea
+              className="field-textarea"
+              name="role_description"
+              onChange={(event) => onChange({ ...form, description: event.target.value })}
+              rows={3}
+              value={form.description}
+            />
+          </label>
+
+          <label className="field">
+            <span>Scope type</span>
+            <select
+              name="scope_type"
+              onChange={(event) =>
+                onChange({
+                  ...form,
+                  scope_type: event.target.value as ScopedRoleScopeType,
+                  scope_id: event.target.value === "organization" ? organizationId : "",
+                })
+              }
+              value={form.scope_type}
+            >
+              <option value="organization">Organization</option>
+              <option value="team">Team</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Scope target</span>
+            {form.scope_type === "organization" ? (
+              <input disabled name="scope_id" value={availableScopeId} />
+            ) : (
+              <select
+                name="scope_id"
+                onChange={(event) => onChange({ ...form, scope_id: event.target.value })}
+                required
+                value={form.scope_id}
+              >
+                <option value="">Select a team</option>
+                {teams.map((team) => (
+                  <option key={team.id} value={team.id}>
+                    {team.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving ? "Creating role…" : "Create role"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function MembershipsPanel({
+  memberships,
+  teams,
+  users,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  memberships: TeamMembership[];
+  teams: Team[];
+  users: CatalogUser[];
+  form: MembershipFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: MembershipFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Memberships workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Relationship graph</p>
+          <h2>Team memberships</h2>
+          <p className="workspace-copy">
+            Attach catalog users to teams through the protected API seam. Duplicate edges,
+            missing teams, and missing users remain diagnosable in-place.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {memberships.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No team memberships yet</h3>
+              <p>Create a team membership to link a catalog user to a container.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Team memberships list">
+              {memberships.map((membership) => (
+                <li className="catalog-user-item" key={membership.id}>
+                  <div>
+                    <h3>{resolveUserName(membership.catalog_user_id, users)}</h3>
+                    <p>{resolveTeamName(membership.team_id, teams)}</p>
+                    <span>Membership ID {membership.id}</span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create team membership</h3>
+
+          <label className="field">
+            <span>Team</span>
+            <select
+              name="membership_team_id"
+              onChange={(event) => onChange({ ...form, team_id: event.target.value })}
+              required
+              value={form.team_id}
+            >
+              <option value="">Select a team</option>
+              {teams.map((team) => (
+                <option key={team.id} value={team.id}>
+                  {team.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Catalog user</span>
+            <select
+              name="membership_catalog_user_id"
+              onChange={(event) => onChange({ ...form, catalog_user_id: event.target.value })}
+              required
+              value={form.catalog_user_id}
+            >
+              <option value="">Select a catalog user</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving ? "Creating membership…" : "Create membership"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function AssignmentsPanel({
+  assignments,
+  roles,
+  users,
+  teams,
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
+}: {
+  assignments: DirectRoleAssignment[];
+  roles: ScopedRole[];
+  users: CatalogUser[];
+  teams: Team[];
+  form: AssignmentFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: AssignmentFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  return (
+    <section className="workspace-card" aria-label="Assignments workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Role relationships</p>
+          <h2>Direct role assignments</h2>
+          <p className="workspace-copy">
+            Assign scoped roles directly to catalog users without leaking into approval or
+            grant lifecycle behavior. Duplicate edges and missing references stay explicit.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {assignments.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No direct role assignments yet</h3>
+              <p>Create an assignment after defining a scoped role and target catalog user.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Direct role assignments list">
+              {assignments.map((assignment) => {
+                const role = roles.find((candidate) => candidate.id === assignment.scoped_role_id);
+                return (
+                  <li className="catalog-user-item" key={assignment.id}>
+                    <div>
+                      <h3>{resolveUserName(assignment.catalog_user_id, users)}</h3>
+                      <p>{resolveRoleName(assignment.scoped_role_id, roles)}</p>
+                      <span>
+                        {role ? resolveScopeLabel(role, teams) : assignment.scoped_role_id} · Assignment ID {assignment.id}
+                      </span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <h3>Create direct role assignment</h3>
+
+          <label className="field">
+            <span>Scoped role</span>
+            <select
+              name="assignment_scoped_role_id"
+              onChange={(event) => onChange({ ...form, scoped_role_id: event.target.value })}
+              required
+              value={form.scoped_role_id}
+            >
+              <option value="">Select a scoped role</option>
+              {roles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name} ({resolveScopeLabel(role, teams)})
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Catalog user</span>
+            <select
+              name="assignment_catalog_user_id"
+              onChange={(event) => onChange({ ...form, catalog_user_id: event.target.value })}
+              required
+              value={form.catalog_user_id}
+            >
+              <option value="">Select a catalog user</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving ? "Creating assignment…" : "Create assignment"}
+            </button>
+          </div>
+
+          <NoticeBlock notice={notice} />
         </form>
       </div>
     </section>
@@ -454,8 +981,20 @@ export function OperatorShell() {
   const [userMode, setUserMode] = useState<CatalogUserFormMode>({ mode: "create" });
   const [userForm, setUserForm] = useState<CatalogUserFormState>(emptyUserForm());
   const [userNotice, setUserNotice] = useState<MutationNotice>(null);
+  const [teamForm, setTeamForm] = useState<TeamFormState>(emptyTeamForm());
+  const [teamNotice, setTeamNotice] = useState<MutationNotice>(null);
+  const [roleForm, setRoleForm] = useState<ScopedRoleFormState>(emptyRoleForm());
+  const [roleNotice, setRoleNotice] = useState<MutationNotice>(null);
+  const [membershipForm, setMembershipForm] = useState<MembershipFormState>(emptyMembershipForm());
+  const [membershipNotice, setMembershipNotice] = useState<MutationNotice>(null);
+  const [assignmentForm, setAssignmentForm] = useState<AssignmentFormState>(emptyAssignmentForm());
+  const [assignmentNotice, setAssignmentNotice] = useState<MutationNotice>(null);
   const [isSavingOrganization, setIsSavingOrganization] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
+  const [isSavingTeam, setIsSavingTeam] = useState(false);
+  const [isSavingRole, setIsSavingRole] = useState(false);
+  const [isSavingMembership, setIsSavingMembership] = useState(false);
+  const [isSavingAssignment, setIsSavingAssignment] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const authenticatedPayload =
@@ -475,6 +1014,13 @@ export function OperatorShell() {
       const data = await readCatalogWorkspace();
       setWorkspaceState({ status: "ready", data });
       setOrganizationForm(emptyOrganizationForm(data));
+      setRoleForm((current) => ({
+        ...current,
+        scope_id:
+          current.scope_type === "organization"
+            ? data.organization.id
+            : current.scope_id,
+      }));
       if (userMode.mode === "create") {
         setUserForm(emptyUserForm());
       }
@@ -649,15 +1195,131 @@ export function OperatorShell() {
     }
   }
 
+  async function handleTeamSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingTeam(true);
+    setTeamNotice(null);
+
+    try {
+      const payload: TeamCreateInput = {
+        name: teamForm.name,
+        description: teamForm.description,
+      };
+      const response = await createTeam(payload);
+      setTeamNotice({
+        tone: "success",
+        message: `Team ${response.team.name} created successfully.`,
+      });
+      setTeamForm(emptyTeamForm());
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setTeamNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingTeam(false);
+    }
+  }
+
+  async function handleRoleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingRole(true);
+    setRoleNotice(null);
+
+    try {
+      const organizationId = workspaceData?.organization.id ?? "";
+      const payload: ScopedRoleCreateInput = {
+        name: roleForm.name,
+        description: roleForm.description,
+        scope_type: roleForm.scope_type,
+        scope_id: roleForm.scope_type === "organization" ? organizationId : roleForm.scope_id,
+      };
+      const response = await createScopedRole(payload);
+      setRoleNotice({
+        tone: "success",
+        message: `Scoped role ${response.scoped_role.name} created successfully.`,
+      });
+      setRoleForm(emptyRoleForm(organizationId));
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setRoleNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingRole(false);
+    }
+  }
+
+  async function handleMembershipSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingMembership(true);
+    setMembershipNotice(null);
+
+    try {
+      const response = await createMembership(membershipForm);
+      const userName = resolveUserName(response.membership.catalog_user_id, workspaceData?.users ?? []);
+      const teamName = resolveTeamName(response.membership.team_id, workspaceData?.teams ?? []);
+      setMembershipNotice({
+        tone: "success",
+        message: `Team membership created for ${userName} in ${teamName}.`,
+      });
+      setMembershipForm(emptyMembershipForm());
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setMembershipNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingMembership(false);
+    }
+  }
+
+  async function handleAssignmentSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingAssignment(true);
+    setAssignmentNotice(null);
+
+    try {
+      const response = await createAssignment(assignmentForm);
+      const userName = resolveUserName(response.assignment.catalog_user_id, workspaceData?.users ?? []);
+      const roleName = resolveRoleName(response.assignment.scoped_role_id, workspaceData?.scoped_roles ?? []);
+      setAssignmentNotice({
+        tone: "success",
+        message: `Direct role assignment created for ${userName} with ${roleName}.`,
+      });
+      setAssignmentForm(emptyAssignmentForm());
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      setAssignmentNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingAssignment(false);
+    }
+  }
+
   return (
     <section className="hero-card app-shell__hero">
       <p className="eyebrow">Protected operator boundary</p>
       <h1>Operator catalog workspace</h1>
       <p className="lede">
         This workspace validates the backend session first, then loads the single
-        organization root plus real catalog-user data from the protected catalog
-        API. Auth expiry redirects back to sign-in, while validation and conflict
-        failures stay visible here for operator diagnosis.
+        organization root, real catalog users, team containers, scoped roles,
+        memberships, and direct role assignments from the protected catalog API.
+        Auth expiry redirects back to sign-in, while validation, conflict,
+        not-found, and scope mismatch failures stay visible here for operator diagnosis.
       </p>
 
       {identityState.status === "loading" ? (
@@ -671,7 +1333,7 @@ export function OperatorShell() {
           <h2>Authentication required</h2>
           <p>
             Your backend session is missing or expired. Sign in again to manage
-            the organization root and catalog users.
+            the organization root and catalog relationships.
           </p>
           <Link className="button button--primary" href="/login">
             Go to sign-in
@@ -711,16 +1373,16 @@ export function OperatorShell() {
               <h2>Catalog contract</h2>
               <p>
                 The frontend only renders catalog data after the backend-owned
-                session resolves, then calls the protected organization and user
-                endpoints through a typed client.
+                session resolves, then calls the protected organization, team,
+                role, membership, assignment, and user endpoints through a typed client.
               </p>
             </article>
             <article className="dashboard-card">
               <h2>Failure diagnosis</h2>
               <p>
-                Auth expiry redirects to sign-in, while validation, conflict, and
-                audit-write failures remain visible with stable backend failure
-                codes for operator troubleshooting.
+                Auth expiry redirects to sign-in, while validation, conflict,
+                not-found, scope mismatch, and audit-write failures remain visible
+                with stable backend failure codes for operator troubleshooting.
               </p>
             </article>
           </section>
@@ -729,7 +1391,8 @@ export function OperatorShell() {
             <div className="workspace-card" role="status">
               <h2>Loading catalog workspace…</h2>
               <p className="workspace-copy">
-                Fetching the organization root and catalog users from the backend.
+                Fetching the organization root, users, teams, scoped roles, memberships,
+                and assignments from the backend.
               </p>
             </div>
           ) : null}
@@ -762,6 +1425,51 @@ export function OperatorShell() {
                 onStartCreate={handleStartCreateUser}
                 onStartEdit={handleStartEditUser}
                 onSubmit={handleUserSubmit}
+                users={workspaceData.users}
+              />
+
+              <TeamsPanel
+                form={teamForm}
+                isSaving={isSavingTeam}
+                memberships={workspaceData.memberships}
+                notice={teamNotice}
+                onChange={setTeamForm}
+                onSubmit={handleTeamSubmit}
+                teams={workspaceData.teams}
+              />
+
+              <RolesPanel
+                assignments={workspaceData.assignments}
+                form={roleForm}
+                isSaving={isSavingRole}
+                notice={roleNotice}
+                onChange={setRoleForm}
+                onSubmit={handleRoleSubmit}
+                organizationId={workspaceData.organization.id}
+                roles={workspaceData.scoped_roles}
+                teams={workspaceData.teams}
+              />
+
+              <MembershipsPanel
+                form={membershipForm}
+                isSaving={isSavingMembership}
+                memberships={workspaceData.memberships}
+                notice={membershipNotice}
+                onChange={setMembershipForm}
+                onSubmit={handleMembershipSubmit}
+                teams={workspaceData.teams}
+                users={workspaceData.users}
+              />
+
+              <AssignmentsPanel
+                assignments={workspaceData.assignments}
+                form={assignmentForm}
+                isSaving={isSavingAssignment}
+                notice={assignmentNotice}
+                onChange={setAssignmentForm}
+                onSubmit={handleAssignmentSubmit}
+                roles={workspaceData.scoped_roles}
+                teams={workspaceData.teams}
                 users={workspaceData.users}
               />
             </div>

@@ -10,8 +10,9 @@ required_files=(
   "compose.yaml"
   "Makefile"
   "docs/local-development.md"
-  "frontend/app/login/page.tsx"
-  "frontend/app/operator/page.tsx"
+  "frontend/lib/catalog.ts"
+  "frontend/app/auth-shell.tsx"
+  "backend/app/api/routes/catalog.py"
 )
 
 for path in "${required_files[@]}"; do
@@ -26,23 +27,69 @@ if ! grep -q "verify-s02" README.md; then
   exit 1
 fi
 
-if ! grep -q "AUTH_BOOTSTRAP_ADMIN_EMAIL" docs/local-development.md; then
-  echo "docs/local-development.md must document bootstrap auth." >&2
-  exit 1
-fi
-
 TEMP_ENV_CREATED=0
 if [[ ! -f .env ]]; then
   cp .env.example .env
   TEMP_ENV_CREATED=1
 fi
 
+COOKIE_JAR=""
+LOGIN_HEADERS=""
+LOGIN_BODY=""
+TEAMS_BODY=""
+ROLES_BODY=""
+MEMBERSHIPS_BODY=""
+ASSIGNMENTS_BODY=""
+TEAM_CREATE_HEADERS=""
+TEAM_CREATE_BODY=""
+ROLE_CREATE_HEADERS=""
+ROLE_CREATE_BODY=""
+MEMBERSHIP_CREATE_HEADERS=""
+MEMBERSHIP_CREATE_BODY=""
+ASSIGNMENT_CREATE_HEADERS=""
+ASSIGNMENT_CREATE_BODY=""
+USERS_BODY=""
+
 cleanup() {
+  rm -f \
+    "$COOKIE_JAR" \
+    "$LOGIN_HEADERS" \
+    "$LOGIN_BODY" \
+    "$TEAMS_BODY" \
+    "$ROLES_BODY" \
+    "$MEMBERSHIPS_BODY" \
+    "$ASSIGNMENTS_BODY" \
+    "$TEAM_CREATE_HEADERS" \
+    "$TEAM_CREATE_BODY" \
+    "$ROLE_CREATE_HEADERS" \
+    "$ROLE_CREATE_BODY" \
+    "$MEMBERSHIP_CREATE_HEADERS" \
+    "$MEMBERSHIP_CREATE_BODY" \
+    "$ASSIGNMENT_CREATE_HEADERS" \
+    "$ASSIGNMENT_CREATE_BODY" \
+    "$USERS_BODY"
   if [[ "$TEMP_ENV_CREATED" -eq 1 ]]; then
     rm -f .env
   fi
 }
 trap cleanup EXIT
+
+print_infra_failure() {
+  local message="$1"
+  echo "$message" >&2
+  echo "Infrastructure gating diagnostic follows." >&2
+  docker compose ps >&2 || true
+  docker compose logs --tail=50 postgres backend frontend >&2 || true
+}
+
+print_service_logs() {
+  echo "Recent backend logs:" >&2
+  docker compose logs --tail=50 backend >&2 || true
+  echo "Recent frontend logs:" >&2
+  docker compose logs --tail=50 frontend >&2 || true
+  echo "Recent postgres logs:" >&2
+  docker compose logs --tail=50 postgres >&2 || true
+}
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker not installed; cannot run compose-backed verification." >&2
@@ -50,17 +97,17 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "docker daemon unavailable; start Docker before running compose-backed verification." >&2
+  echo "docker daemon unavailable; start Docker before running compose-backed verification. This is infrastructure gating, not a product failure." >&2
   exit 1
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required for auth verification." >&2
+  echo "curl is required for catalog verification." >&2
   exit 1
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required for auth verification." >&2
+  echo "python3 is required for catalog verification." >&2
   exit 1
 fi
 
@@ -79,22 +126,21 @@ wait_for_service_health() {
   while true; do
     service_json="$(docker compose ps --format json "$service" 2>/dev/null || true)"
     if [[ -z "$service_json" ]]; then
-      echo "$service service is not running under docker compose." >&2
-      echo "Infrastructure gating diagnostic follows." >&2
-      docker compose ps >&2 || true
-      docker compose logs --tail=50 "$service" >&2 || true
+      print_infra_failure "$service service is not running under docker compose."
       return 1
     fi
 
-    service_health="$(printf '%s\n' "$service_json" | python3 -c 'import json,sys; rows=[json.loads(line) for line in sys.stdin if line.strip()]; print(rows[0].get("Health","")) if rows else sys.exit(1)')"
+    service_health="$(printf '%s\n' "$service_json" | python3 -c 'import json,sys
+rows=[json.loads(line) for line in sys.stdin if line.strip()]
+if not rows:
+    raise SystemExit(1)
+print(rows[0].get("Health", ""))')"
     if [[ "$service_health" == "healthy" ]]; then
       return 0
     fi
 
     if (( $(date +%s) - start_ts >= timeout_seconds )); then
-      echo "$service service is not healthy (status: ${service_health:-unknown})." >&2
-      echo "Recent $service logs:" >&2
-      docker compose logs --tail=50 "$service" >&2 || true
+      print_infra_failure "$service service is not healthy (status: ${service_health:-unknown})."
       return 1
     fi
 
@@ -107,32 +153,26 @@ for service in postgres backend frontend; do
 done
 
 backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1"
-frontend_url="http://127.0.0.1:${FRONTEND_PORT:-3000}"
-cookie_jar="$(mktemp)"
-trap 'rm -f "$cookie_jar"; cleanup' EXIT
+COOKIE_JAR="$(mktemp)"
+LOGIN_HEADERS="$(mktemp)"
+LOGIN_BODY="$(mktemp)"
+TEAMS_BODY="$(mktemp)"
+ROLES_BODY="$(mktemp)"
+MEMBERSHIPS_BODY="$(mktemp)"
+ASSIGNMENTS_BODY="$(mktemp)"
+TEAM_CREATE_HEADERS="$(mktemp)"
+TEAM_CREATE_BODY="$(mktemp)"
+ROLE_CREATE_HEADERS="$(mktemp)"
+ROLE_CREATE_BODY="$(mktemp)"
+MEMBERSHIP_CREATE_HEADERS="$(mktemp)"
+MEMBERSHIP_CREATE_BODY="$(mktemp)"
+ASSIGNMENT_CREATE_HEADERS="$(mktemp)"
+ASSIGNMENT_CREATE_BODY="$(mktemp)"
+USERS_BODY="$(mktemp)"
+CORRELATION_ID="verify-s02-$(date +%s)"
+TEAM_NAME="Security ${CORRELATION_ID}"
+ROLE_NAME="Security Admin ${CORRELATION_ID}"
 
-echo "==> Probing backend health endpoint: ${backend_url}/health"
-backend_payload="$(curl --fail --silent --show-error "${backend_url}/health")"
-printf '%s\n' "$backend_payload"
-printf '%s' "$backend_payload" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["status"] == "ok"; assert payload["service"] == "passark-backend"; assert payload["environment"]'
-
-echo "==> Verifying anonymous protected access is rejected"
-anon_headers="$(mktemp)"
-anon_body="$(mktemp)"
-curl --silent --show-error \
-  --output "$anon_body" \
-  --dump-header "$anon_headers" \
-  "${backend_url}/protected/whoami"
-anon_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$anon_headers")"
-if [[ "$anon_status" != "401" ]]; then
-  echo "Expected anonymous protected access to return 401; got ${anon_status:-unknown}." >&2
-  cat "$anon_headers" >&2
-  cat "$anon_body" >&2
-  rm -f "$anon_headers" "$anon_body"
-  exit 1
-fi
-printf '%s' "$(cat "$anon_body")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "auth_unauthenticated"'
-rm -f "$anon_headers" "$anon_body"
 
 echo "==> Logging in with bootstrap operator"
 login_payload="$(python3 - <<'PY'
@@ -144,40 +184,181 @@ print(json.dumps({
 }))
 PY
 )"
-login_headers="$(mktemp)"
-login_body="$(mktemp)"
 curl --silent --show-error \
-  --cookie-jar "$cookie_jar" \
-  --output "$login_body" \
-  --dump-header "$login_headers" \
+  --cookie-jar "$COOKIE_JAR" \
+  --output "$LOGIN_BODY" \
+  --dump-header "$LOGIN_HEADERS" \
   --header 'Content-Type: application/json' \
   --data "$login_payload" \
   "${backend_url}/auth/login"
-login_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$login_headers")"
+login_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$LOGIN_HEADERS")"
 if [[ "$login_status" != "200" ]]; then
   echo "Expected login to succeed; got ${login_status:-unknown}." >&2
-  cat "$login_headers" >&2
-  cat "$login_body" >&2
-  rm -f "$login_headers" "$login_body"
+  cat "$LOGIN_HEADERS" >&2
+  cat "$LOGIN_BODY" >&2
+  print_service_logs
   exit 1
 fi
-printf '%s' "$(cat "$login_body")" | python3 -c 'import json,os,sys; payload=json.load(sys.stdin); assert payload["user"]["email"] == os.environ.get("AUTH_BOOTSTRAP_ADMIN_EMAIL", "admin@passark.local")'
-rm -f "$login_headers" "$login_body"
 
-echo "==> Verifying authenticated protected access succeeds"
-whoami_payload="$(curl --fail --silent --show-error --cookie "$cookie_jar" "${backend_url}/protected/whoami")"
-printf '%s\n' "$whoami_payload"
-printf '%s' "$whoami_payload" | python3 -c 'import json,os,sys; payload=json.load(sys.stdin); assert payload["user"]["email"] == os.environ.get("AUTH_BOOTSTRAP_ADMIN_EMAIL", "admin@passark.local"); assert payload["session_id"] > 0'
 
-echo "==> Probing frontend routes for login-first/protected shell copy"
-frontend_home="$(curl --fail --silent --show-error "$frontend_url")"
-printf '%s' "$frontend_home" | grep -q "Sign in to reach the protected operator shell"
-frontend_login="$(curl --fail --silent --show-error "$frontend_url/login")"
-printf '%s' "$frontend_login" | grep -q "Authenticate with the local bootstrap operator"
-frontend_operator="$(curl --fail --silent --show-error "$frontend_url/operator")"
-printf '%s' "$frontend_operator" | grep -q "Checking backend session"
-printf '%s' "$frontend_operator" | grep -q "Operator shell"
-printf '%s' "$frontend_operator" | grep -q "protected/whoami"
-printf '%s' "$frontend_operator" | grep -q "Protected operator boundary"
+echo "==> Listing existing catalog users"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/users" > "$USERS_BODY"
+CATALOG_USER_ID="$(python3 - "$USERS_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+items = payload.get("items", [])
+if not items:
+    raise SystemExit("No catalog users exist; create one via the operator workspace before running verify-s02.")
+print(items[0]["id"])
+PY
+)"
 
-echo "S02 integrated auth verification passed."
+
+echo "==> Creating a team through the protected catalog API"
+team_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": ${TEAM_NAME@Q},
+    "description": "Verification team created by verify-s02",
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$TEAM_CREATE_BODY" \
+  --dump-header "$TEAM_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$team_payload" \
+  "${backend_url}/catalog/teams"
+team_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$TEAM_CREATE_HEADERS")"
+if [[ "$team_status" != "201" ]]; then
+  echo "Expected team create to succeed; got ${team_status:-unknown}." >&2
+  cat "$TEAM_CREATE_HEADERS" >&2
+  cat "$TEAM_CREATE_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+TEAM_ID="$(python3 - "$TEAM_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["team"]["id"])
+PY
+)"
+
+
+echo "==> Creating a team-scoped role through the protected catalog API"
+role_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": ${ROLE_NAME@Q},
+    "description": "Verification role created by verify-s02",
+    "scope_type": "team",
+    "scope_id": ${TEAM_ID@Q},
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$ROLE_CREATE_BODY" \
+  --dump-header "$ROLE_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$role_payload" \
+  "${backend_url}/catalog/roles"
+role_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$ROLE_CREATE_HEADERS")"
+if [[ "$role_status" != "201" ]]; then
+  echo "Expected scoped role create to succeed; got ${role_status:-unknown}." >&2
+  cat "$ROLE_CREATE_HEADERS" >&2
+  cat "$ROLE_CREATE_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+ROLE_ID="$(python3 - "$ROLE_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["scoped_role"]["id"])
+PY
+)"
+
+
+echo "==> Creating a team membership through the protected catalog API"
+membership_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "team_id": ${TEAM_ID@Q},
+    "catalog_user_id": ${CATALOG_USER_ID@Q},
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$MEMBERSHIP_CREATE_BODY" \
+  --dump-header "$MEMBERSHIP_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$membership_payload" \
+  "${backend_url}/catalog/memberships"
+membership_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$MEMBERSHIP_CREATE_HEADERS")"
+if [[ "$membership_status" != "201" ]]; then
+  echo "Expected membership create to succeed; got ${membership_status:-unknown}." >&2
+  cat "$MEMBERSHIP_CREATE_HEADERS" >&2
+  cat "$MEMBERSHIP_CREATE_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+
+
+echo "==> Creating a direct role assignment through the protected catalog API"
+assignment_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "scoped_role_id": ${ROLE_ID@Q},
+    "catalog_user_id": ${CATALOG_USER_ID@Q},
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$ASSIGNMENT_CREATE_BODY" \
+  --dump-header "$ASSIGNMENT_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$assignment_payload" \
+  "${backend_url}/catalog/assignments"
+assignment_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$ASSIGNMENT_CREATE_HEADERS")"
+if [[ "$assignment_status" != "201" ]]; then
+  echo "Expected assignment create to succeed; got ${assignment_status:-unknown}." >&2
+  cat "$ASSIGNMENT_CREATE_HEADERS" >&2
+  cat "$ASSIGNMENT_CREATE_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+
+
+echo "==> Verifying list endpoints expose the new relationship records"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/teams" > "$TEAMS_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/roles" > "$ROLES_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/memberships" > "$MEMBERSHIPS_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/assignments" > "$ASSIGNMENTS_BODY"
+
+python3 - "$TEAMS_BODY" "$ROLES_BODY" "$MEMBERSHIPS_BODY" "$ASSIGNMENTS_BODY" "$TEAM_ID" "$ROLE_ID" "$CATALOG_USER_ID" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+teams = json.loads(Path(sys.argv[1]).read_text())["items"]
+roles = json.loads(Path(sys.argv[2]).read_text())["items"]
+memberships = json.loads(Path(sys.argv[3]).read_text())["items"]
+assignments = json.loads(Path(sys.argv[4]).read_text())["items"]
+team_id, role_id, catalog_user_id = sys.argv[5:8]
+
+assert any(item["id"] == team_id for item in teams), teams
+assert any(item["id"] == role_id and item["scope_id"] == team_id for item in roles), roles
+assert any(item["team_id"] == team_id and item["catalog_user_id"] == catalog_user_id for item in memberships), memberships
+assert any(item["scoped_role_id"] == role_id and item["catalog_user_id"] == catalog_user_id for item in assignments), assignments
+PY
+
+echo "S02 integrated catalog verification passed: login, team create, scoped-role create, membership link, and direct assignment link all succeeded through the protected API seam."

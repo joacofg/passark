@@ -36,23 +36,19 @@ vi.mock("../lib/catalog", async () => {
     updateOrganization: vi.fn(),
     createCatalogUser: vi.fn(),
     updateCatalogUser: vi.fn(),
+    createTeam: vi.fn(),
+    createScopedRole: vi.fn(),
+    createMembership: vi.fn(),
+    createAssignment: vi.fn(),
   };
 });
 
 const { logout, readProtectedWhoAmI } = await import("../lib/auth");
-const {
-  createCatalogUser,
-  readCatalogWorkspace,
-  updateCatalogUser,
-  updateOrganization,
-} = await import("../lib/catalog");
+const { readCatalogWorkspace } = await import("../lib/catalog");
 
 const logoutMock = vi.mocked(logout);
 const readProtectedWhoAmIMock = vi.mocked(readProtectedWhoAmI);
 const readCatalogWorkspaceMock = vi.mocked(readCatalogWorkspace);
-const updateOrganizationMock = vi.mocked(updateOrganization);
-const createCatalogUserMock = vi.mocked(createCatalogUser);
-const updateCatalogUserMock = vi.mocked(updateCatalogUser);
 
 const workspaceFixture = {
   organization: {
@@ -75,6 +71,44 @@ const workspaceFixture = {
       updated_at: "2024-01-01T00:00:00Z",
     },
   ],
+  teams: [
+    {
+      id: "team_platform",
+      organization_id: "org_123",
+      name: "Platform Engineering",
+      description: "Owns backend systems",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  scoped_roles: [
+    {
+      id: "role_team_maintainer",
+      organization_id: "org_123",
+      name: "Team Maintainer",
+      description: "Maintains team resources",
+      scope_type: "team" as const,
+      scope_id: "team_platform",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  memberships: [
+    {
+      id: "tm_1",
+      team_id: "team_platform",
+      catalog_user_id: "cu_ada",
+      created_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  assignments: [
+    {
+      id: "dra_1",
+      scoped_role_id: "role_team_maintainer",
+      catalog_user_id: "cu_ada",
+      created_at: "2024-01-01T00:00:00Z",
+    },
+  ],
 };
 
 describe("OperatorPage", () => {
@@ -85,9 +119,6 @@ describe("OperatorPage", () => {
     logoutMock.mockReset();
     readProtectedWhoAmIMock.mockReset();
     readCatalogWorkspaceMock.mockReset();
-    updateOrganizationMock.mockReset();
-    createCatalogUserMock.mockReset();
-    updateCatalogUserMock.mockReset();
   });
 
   it("renders the real catalog workspace after the backend session resolves", async () => {
@@ -106,10 +137,13 @@ describe("OperatorPage", () => {
 
     expect(await screen.findByDisplayValue("PassArk")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Primary org")).toBeInTheDocument();
-    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
-    expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /edit ada lovelace/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Team Maintainer" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Team memberships" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Direct role assignments" })).toBeInTheDocument();
     expect(
-      screen.getByText(/validation, conflict, and audit-write failures remain visible/i),
+      screen.getByText(/validation, conflict, not-found, scope mismatch, and audit-write failures remain visible/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/session token/i)).not.toBeInTheDocument();
   });
