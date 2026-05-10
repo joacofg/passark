@@ -1,36 +1,68 @@
 "use client";
 
+import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
   AuthApiRequestError,
-  AuthenticatedUser,
-  ProtectedWhoAmIResponse,
-  VaultAccessProbeResponse,
-  isUnauthenticatedError,
   login,
   logout,
+  type AuthenticatedUser,
+  isUnauthenticatedError,
   readProtectedWhoAmI,
-  runVaultAccessProbe,
 } from "@/lib/auth";
+import {
+  type CatalogApiError,
+  type CatalogUser,
+  type CatalogUserCreateInput,
+  type CatalogUserUpdateInput,
+  type CatalogWorkspaceData,
+  createCatalogUser,
+  decodeCatalogError,
+  readCatalogWorkspace,
+  updateCatalogUser,
+  updateOrganization,
+} from "@/lib/catalog";
 
 const DEFAULT_ERROR_MESSAGE = "Unable to sign in with the provided credentials.";
-const DEFAULT_PROBE_ERROR_MESSAGE =
-  "Unable to complete the protected vault access check right now.";
+const DEFAULT_WORKSPACE_ERROR_MESSAGE =
+  "Unable to load the operator catalog workspace right now.";
+const DEFAULT_MUTATION_ERROR_MESSAGE =
+  "Unable to save the catalog change right now.";
 
-type OperatorState =
+type OperatorIdentityState =
   | { status: "loading" }
-  | { status: "authenticated"; payload: ProtectedWhoAmIResponse }
+  | { status: "authenticated"; payload: { user: AuthenticatedUser; session_id: number } }
   | { status: "unauthenticated" }
   | { status: "error"; message: string };
 
-type ProbeState =
+type WorkspaceState =
   | { status: "idle" }
-  | { status: "running" }
-  | { status: "success"; payload: VaultAccessProbeResponse }
+  | { status: "loading" }
+  | { status: "ready"; data: CatalogWorkspaceData }
   | { status: "error"; message: string; code?: string };
+
+type MutationNotice =
+  | { tone: "success"; message: string }
+  | { tone: "error"; message: string; code?: string }
+  | null;
+
+type OrganizationFormState = {
+  display_name: string;
+  description: string;
+};
+
+type CatalogUserFormState = {
+  email: string;
+  full_name: string;
+  job_title: string;
+  is_active: boolean;
+};
+
+type CatalogUserFormMode =
+  | { mode: "create" }
+  | { mode: "edit"; catalogUserId: string };
 
 export function LoginForm() {
   const router = useRouter();
@@ -107,7 +139,50 @@ export function LoginForm() {
   );
 }
 
-function OperatorSummary({
+function formatCatalogError(error: unknown, fallbackMessage: string): MutationNotice {
+  const decoded = decodeCatalogError(error);
+
+  return {
+    tone: "error",
+    message: decoded.message || fallbackMessage,
+    code: decoded.code,
+  };
+}
+
+function deriveWorkspaceError(error: unknown): { message: string; code?: string } {
+  const decoded = decodeCatalogError(error);
+  return {
+    message: decoded.message || DEFAULT_WORKSPACE_ERROR_MESSAGE,
+    code: decoded.code !== "unknown_catalog_error" ? decoded.code : undefined,
+  };
+}
+
+function emptyOrganizationForm(data: CatalogWorkspaceData): OrganizationFormState {
+  return {
+    display_name: data.organization.display_name,
+    description: data.organization.description ?? "",
+  };
+}
+
+function emptyUserForm(): CatalogUserFormState {
+  return {
+    email: "",
+    full_name: "",
+    job_title: "",
+    is_active: true,
+  };
+}
+
+function userFormFromCatalogUser(user: CatalogUser): CatalogUserFormState {
+  return {
+    email: user.email,
+    full_name: user.full_name,
+    job_title: user.job_title ?? "",
+    is_active: user.is_active,
+  };
+}
+
+function OperatorIdentitySummary({
   user,
   sessionId,
 }: {
@@ -129,78 +204,239 @@ function OperatorSummary({
       <article className="status-card">
         <h2>Account state</h2>
         <p>{user.is_active ? "Active" : "Inactive"}</p>
-        <span>Unauthenticated browsers never receive this protected payload.</span>
+        <span>Protected catalog reads only render after session validation succeeds.</span>
       </article>
     </section>
   );
 }
 
-function ProbePanel({
-  state,
-  onRun,
+function OrganizationPanel({
+  form,
+  isSaving,
+  notice,
+  onChange,
+  onSubmit,
 }: {
-  state: ProbeState;
-  onRun: () => Promise<void>;
+  form: OrganizationFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onChange: (next: OrganizationFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
 }) {
   return (
-    <section className="probe-panel" aria-label="Audited operator action">
-      <div className="probe-panel__copy">
-        <p className="eyebrow">Audited sensitive action</p>
-        <h2>Vault access probe</h2>
-        <p className="probe-panel__lede">
-          Trigger the backend&rsquo;s audited <code>vault-access-probe</code> route to
-          confirm protected actions resolve the current operator and surface
-          stable failure codes without exposing secrets.
+    <section className="workspace-card" aria-label="Organization root">
+      <div>
+        <p className="eyebrow">Single-company root</p>
+        <h2>Organization record</h2>
+        <p className="workspace-copy">
+          Update the explicit deployment root that downstream catalog slices will
+          reference. Audit persistence remains mandatory for this write path.
         </p>
       </div>
 
-      <div className="probe-panel__body">
-        <button
-          className="button button--primary"
-          disabled={state.status === "running"}
-          onClick={() => {
-            void onRun();
-          }}
-          type="button"
-        >
-          {state.status === "running" ? "Running audit check…" : "Run vault access probe"}
-        </button>
+      <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+        <label className="field">
+          <span>Display name</span>
+          <input
+            name="display_name"
+            onChange={(event) =>
+              onChange({ ...form, display_name: event.target.value })
+            }
+            required
+            value={form.display_name}
+          />
+        </label>
 
-        <div className="probe-status" aria-live="polite">
-          {state.status === "idle" ? (
-            <p className="probe-status__hint" role="status">
-              Ready to confirm audited protected access.
-            </p>
-          ) : null}
+        <label className="field">
+          <span>Description</span>
+          <textarea
+            className="field-textarea"
+            name="description"
+            onChange={(event) =>
+              onChange({ ...form, description: event.target.value })
+            }
+            rows={4}
+            value={form.description}
+          />
+        </label>
 
-          {state.status === "running" ? (
-            <p className="probe-status__hint" role="status">
-              Running audited protected action…
-            </p>
-          ) : null}
-
-          {state.status === "success" ? (
-            <div className="probe-status__success" role="status">
-              <h3>Protected action allowed</h3>
-              <p>
-                Operation <code>{state.payload.operation}</code> completed for operator #{" "}
-                {state.payload.actor_id}.
-              </p>
-              <ul>
-                <li>Status: {state.payload.status}</li>
-                <li>Audit event: #{state.payload.audit_event_id}</li>
-              </ul>
-            </div>
-          ) : null}
-
-          {state.status === "error" ? (
-            <div className="probe-status__error" role="alert">
-              <h3>Protected action failed</h3>
-              <p>{state.message}</p>
-              {state.code ? <p>Failure code: {state.code}</p> : null}
-            </div>
-          ) : null}
+        <div className="workspace-form__actions">
+          <button className="button button--primary" disabled={isSaving} type="submit">
+            {isSaving ? "Saving organization…" : "Save organization"}
+          </button>
         </div>
+
+        {notice ? (
+          <div
+            className={
+              notice.tone === "success" ? "inline-notice inline-notice--success" : "inline-notice inline-notice--error"
+            }
+            role={notice.tone === "success" ? "status" : "alert"}
+          >
+            <p>{notice.message}</p>
+            {notice.tone === "error" && notice.code ? (
+              <p>Failure code: {notice.code}</p>
+            ) : null}
+          </div>
+        ) : null}
+      </form>
+    </section>
+  );
+}
+
+function CatalogUsersPanel({
+  users,
+  mode,
+  form,
+  isSaving,
+  notice,
+  onStartCreate,
+  onStartEdit,
+  onCancel,
+  onChange,
+  onSubmit,
+}: {
+  users: CatalogUser[];
+  mode: CatalogUserFormMode;
+  form: CatalogUserFormState;
+  isSaving: boolean;
+  notice: MutationNotice;
+  onStartCreate: () => void;
+  onStartEdit: (user: CatalogUser) => void;
+  onCancel: () => void;
+  onChange: (next: CatalogUserFormState) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+}) {
+  const activeEditUserId = mode.mode === "edit" ? mode.catalogUserId : null;
+
+  return (
+    <section className="workspace-card" aria-label="Catalog users workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">Catalog-grade identities</p>
+          <h2>Catalog users</h2>
+          <p className="workspace-copy">
+            Manage operator-facing people records beyond the bootstrap auth identity.
+            Validation, conflict, and auth-expiry errors stay visible in-place.
+          </p>
+        </div>
+        <button className="button button--secondary" onClick={onStartCreate} type="button">
+          Create catalog user
+        </button>
+      </div>
+
+      <div className="catalog-layout">
+        <div>
+          {users.length === 0 ? (
+            <div className="empty-state" role="status">
+              <h3>No catalog users yet</h3>
+              <p>Create the first managed user record for this organization.</p>
+            </div>
+          ) : (
+            <ul className="catalog-user-list" aria-label="Catalog users list">
+              {users.map((user) => {
+                const isEditing = activeEditUserId === user.id;
+                return (
+                  <li className="catalog-user-item" key={user.id}>
+                    <div>
+                      <h3>{user.full_name}</h3>
+                      <p>{user.email}</p>
+                      <span>
+                        {user.job_title ? `${user.job_title} · ` : ""}
+                        {user.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </div>
+                    <button
+                      className="button button--secondary"
+                      onClick={() => onStartEdit(user)}
+                      type="button"
+                    >
+                      {isEditing ? "Editing" : `Edit ${user.full_name}`}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <form className="workspace-form" onSubmit={(event) => void onSubmit(event)}>
+          <div className="workspace-form__title-row">
+            <h3>{mode.mode === "create" ? "Create catalog user" : "Edit catalog user"}</h3>
+            {mode.mode === "edit" ? (
+              <button className="link-button" onClick={onCancel} type="button">
+                Cancel edit
+              </button>
+            ) : null}
+          </div>
+
+          <label className="field">
+            <span>Email</span>
+            <input
+              disabled={mode.mode === "edit"}
+              name="email"
+              onChange={(event) => onChange({ ...form, email: event.target.value })}
+              required
+              type="email"
+              value={form.email}
+            />
+          </label>
+
+          <label className="field">
+            <span>Full name</span>
+            <input
+              name="full_name"
+              onChange={(event) => onChange({ ...form, full_name: event.target.value })}
+              required
+              value={form.full_name}
+            />
+          </label>
+
+          <label className="field">
+            <span>Job title</span>
+            <input
+              name="job_title"
+              onChange={(event) => onChange({ ...form, job_title: event.target.value })}
+              value={form.job_title}
+            />
+          </label>
+
+          <label className="checkbox-field">
+            <input
+              checked={form.is_active}
+              name="is_active"
+              onChange={(event) => onChange({ ...form, is_active: event.target.checked })}
+              type="checkbox"
+            />
+            <span>Catalog user is active</span>
+          </label>
+
+          <div className="workspace-form__actions">
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              {isSaving
+                ? mode.mode === "create"
+                  ? "Creating user…"
+                  : "Saving user…"
+                : mode.mode === "create"
+                  ? "Create user"
+                  : "Save user"}
+            </button>
+          </div>
+
+          {notice ? (
+            <div
+              className={
+                notice.tone === "success" ? "inline-notice inline-notice--success" : "inline-notice inline-notice--error"
+              }
+              role={notice.tone === "success" ? "status" : "alert"}
+            >
+              <p>{notice.message}</p>
+              {notice.tone === "error" && notice.code ? (
+                <p>Failure code: {notice.code}</p>
+              ) : null}
+            </div>
+          ) : null}
+        </form>
       </div>
     </section>
   );
@@ -208,11 +444,54 @@ function ProbePanel({
 
 export function OperatorShell() {
   const router = useRouter();
-  const [state, setState] = useState<OperatorState>({ status: "loading" });
-  const [probeState, setProbeState] = useState<ProbeState>({ status: "idle" });
+  const [identityState, setIdentityState] = useState<OperatorIdentityState>({ status: "loading" });
+  const [workspaceState, setWorkspaceState] = useState<WorkspaceState>({ status: "idle" });
+  const [organizationForm, setOrganizationForm] = useState<OrganizationFormState>({
+    display_name: "",
+    description: "",
+  });
+  const [organizationNotice, setOrganizationNotice] = useState<MutationNotice>(null);
+  const [userMode, setUserMode] = useState<CatalogUserFormMode>({ mode: "create" });
+  const [userForm, setUserForm] = useState<CatalogUserFormState>(emptyUserForm());
+  const [userNotice, setUserNotice] = useState<MutationNotice>(null);
+  const [isSavingOrganization, setIsSavingOrganization] = useState(false);
+  const [isSavingUser, setIsSavingUser] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
   const authenticatedPayload =
-    state.status === "authenticated" ? state.payload : null;
+    identityState.status === "authenticated" ? identityState.payload : null;
+  const workspaceData = workspaceState.status === "ready" ? workspaceState.data : null;
+
+  async function redirectToLogin() {
+    setIdentityState({ status: "unauthenticated" });
+    setWorkspaceState({ status: "idle" });
+    router.replace("/login?reason=unauthenticated");
+  }
+
+  async function loadWorkspace() {
+    setWorkspaceState({ status: "loading" });
+
+    try {
+      const data = await readCatalogWorkspace();
+      setWorkspaceState({ status: "ready", data });
+      setOrganizationForm(emptyOrganizationForm(data));
+      if (userMode.mode === "create") {
+        setUserForm(emptyUserForm());
+      }
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
+        return;
+      }
+
+      const workspaceError = deriveWorkspaceError(error);
+      setWorkspaceState({
+        status: "error",
+        message: workspaceError.message,
+        code: workspaceError.code,
+      });
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -220,22 +499,23 @@ export function OperatorShell() {
     async function load() {
       try {
         const payload = await readProtectedWhoAmI();
-        if (isMounted) {
-          setState({ status: "authenticated", payload });
+        if (!isMounted) {
+          return;
         }
+        setIdentityState({ status: "authenticated", payload });
       } catch (error) {
         if (!isMounted) {
           return;
         }
 
         if (isUnauthenticatedError(error)) {
-          setState({ status: "unauthenticated" });
+          setIdentityState({ status: "unauthenticated" });
           router.replace("/login?reason=unauthenticated");
           return;
         }
 
-        const message = error instanceof Error ? error.message : "Unable to load operator data.";
-        setState({ status: "error", message });
+        const message = error instanceof Error ? error.message : DEFAULT_WORKSPACE_ERROR_MESSAGE;
+        setIdentityState({ status: "error", message });
       }
     }
 
@@ -245,6 +525,22 @@ export function OperatorShell() {
       isMounted = false;
     };
   }, [router]);
+
+  useEffect(() => {
+    if (identityState.status !== "authenticated") {
+      return;
+    }
+
+    void loadWorkspace();
+  }, [identityState.status]);
+
+  const selectedUser = useMemo(() => {
+    if (!workspaceData || userMode.mode !== "edit") {
+      return null;
+    }
+
+    return workspaceData.users.find((user) => user.id === userMode.catalogUserId) ?? null;
+  }, [userMode, workspaceData]);
 
   async function handleLogout() {
     setIsLoggingOut(true);
@@ -257,62 +553,125 @@ export function OperatorShell() {
     }
   }
 
-  async function handleVaultAccessProbe() {
-    setProbeState({ status: "running" });
+  async function handleOrganizationSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingOrganization(true);
+    setOrganizationNotice(null);
 
     try {
-      const payload = await runVaultAccessProbe();
-      setProbeState({ status: "success", payload });
+      const response = await updateOrganization({
+        display_name: organizationForm.display_name,
+        description: organizationForm.description,
+      });
+
+      setOrganizationNotice({
+        tone: "success",
+        message: `Organization saved. Audit event #${response.audit_event_id} captured for ${response.organization.display_name}.`,
+      });
+
+      await loadWorkspace();
     } catch (error) {
       if (isUnauthenticatedError(error)) {
-        setState({ status: "unauthenticated" });
-        setProbeState({
-          status: "error",
-          message: error.message,
-          code: error.code,
-        });
-        router.replace("/login?reason=unauthenticated");
+        await redirectToLogin();
         return;
       }
 
-      if (error instanceof AuthApiRequestError) {
-        setProbeState({
-          status: "error",
-          message: error.message,
-          code: error.code,
+      setOrganizationNotice(
+        formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE),
+      );
+    } finally {
+      setIsSavingOrganization(false);
+    }
+  }
+
+  function handleStartCreateUser() {
+    setUserMode({ mode: "create" });
+    setUserForm(emptyUserForm());
+    setUserNotice(null);
+  }
+
+  function handleStartEditUser(user: CatalogUser) {
+    setUserMode({ mode: "edit", catalogUserId: user.id });
+    setUserForm(userFormFromCatalogUser(user));
+    setUserNotice(null);
+  }
+
+  function handleCancelEditUser() {
+    setUserMode({ mode: "create" });
+    setUserForm(emptyUserForm());
+    setUserNotice(null);
+  }
+
+  async function handleUserSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSavingUser(true);
+    setUserNotice(null);
+
+    try {
+      if (userMode.mode === "create") {
+        const payload: CatalogUserCreateInput = {
+          email: userForm.email,
+          full_name: userForm.full_name,
+          job_title: userForm.job_title,
+          is_active: userForm.is_active,
+        };
+        const response = await createCatalogUser(payload);
+        setUserNotice({
+          tone: "success",
+          message: `Catalog user ${response.catalog_user.full_name} created successfully.`,
         });
+        setUserForm(emptyUserForm());
+      } else {
+        const payload: CatalogUserUpdateInput = {
+          full_name: userForm.full_name,
+          job_title: userForm.job_title,
+          is_active: userForm.is_active,
+        };
+        const response = await updateCatalogUser(userMode.catalogUserId, payload);
+        setUserNotice({
+          tone: "success",
+          message: `Catalog user ${response.catalog_user.full_name} updated successfully.`,
+        });
+        setUserMode({ mode: "create" });
+        setUserForm(emptyUserForm());
+      }
+
+      await loadWorkspace();
+    } catch (error) {
+      if (isUnauthenticatedError(error)) {
+        await redirectToLogin();
         return;
       }
 
-      setProbeState({
-        status: "error",
-        message: DEFAULT_PROBE_ERROR_MESSAGE,
-      });
+      setUserNotice(formatCatalogError(error, DEFAULT_MUTATION_ERROR_MESSAGE));
+    } finally {
+      setIsSavingUser(false);
     }
   }
 
   return (
     <section className="hero-card app-shell__hero">
       <p className="eyebrow">Protected operator boundary</p>
-      <h1>Operator shell</h1>
+      <h1>Operator catalog workspace</h1>
       <p className="lede">
-        This page fetches real protected data from <code>/protected/whoami</code>
-        with cookies included. Anonymous browsers are redirected away before
-        protected content is shown.
+        This workspace validates the backend session first, then loads the single
+        organization root plus real catalog-user data from the protected catalog
+        API. Auth expiry redirects back to sign-in, while validation and conflict
+        failures stay visible here for operator diagnosis.
       </p>
 
-      {state.status === "loading" ? (
+      {identityState.status === "loading" ? (
         <p className="session-hint" role="status">
           Checking backend session…
         </p>
       ) : null}
 
-      {state.status === "unauthenticated" ? (
+      {identityState.status === "unauthenticated" ? (
         <div className="fallback-card" role="alert">
           <h2>Authentication required</h2>
           <p>
-            Your backend session is missing or expired. Sign in again to view
-            protected operator data.
+            Your backend session is missing or expired. Sign in again to manage
+            the organization root and catalog users.
           </p>
           <Link className="button button--primary" href="/login">
             Go to sign-in
@@ -320,10 +679,10 @@ export function OperatorShell() {
         </div>
       ) : null}
 
-      {state.status === "error" ? (
+      {identityState.status === "error" ? (
         <div className="fallback-card" role="alert">
           <h2>Unable to load protected data</h2>
-          <p>{state.message}</p>
+          <p>{identityState.message}</p>
         </div>
       ) : null}
 
@@ -342,30 +701,71 @@ export function OperatorShell() {
             </button>
           </div>
 
-          <OperatorSummary
+          <OperatorIdentitySummary
             sessionId={authenticatedPayload.session_id}
             user={authenticatedPayload.user}
           />
 
           <section className="dashboard-grid" aria-label="Operator dashboard status">
             <article className="dashboard-card dashboard-card--highlight">
-              <h2>Session trust boundary</h2>
+              <h2>Catalog contract</h2>
               <p>
-                The backend owns authentication state. This shell only renders
-                operator details after the protected session resolves.
+                The frontend only renders catalog data after the backend-owned
+                session resolves, then calls the protected organization and user
+                endpoints through a typed client.
               </p>
             </article>
             <article className="dashboard-card">
               <h2>Failure diagnosis</h2>
               <p>
-                Missing sessions redirect to sign-in, protected fetch failures
-                stay visible here, and audited action denials surface stable
-                backend error codes.
+                Auth expiry redirects to sign-in, while validation, conflict, and
+                audit-write failures remain visible with stable backend failure
+                codes for operator troubleshooting.
               </p>
             </article>
           </section>
 
-          <ProbePanel onRun={handleVaultAccessProbe} state={probeState} />
+          {workspaceState.status === "loading" || workspaceState.status === "idle" ? (
+            <div className="workspace-card" role="status">
+              <h2>Loading catalog workspace…</h2>
+              <p className="workspace-copy">
+                Fetching the organization root and catalog users from the backend.
+              </p>
+            </div>
+          ) : null}
+
+          {workspaceState.status === "error" ? (
+            <div className="fallback-card" role="alert">
+              <h2>Unable to load catalog workspace</h2>
+              <p>{workspaceState.message}</p>
+              {workspaceState.code ? <p>Failure code: {workspaceState.code}</p> : null}
+            </div>
+          ) : null}
+
+          {workspaceData ? (
+            <div className="workspace-grid">
+              <OrganizationPanel
+                form={organizationForm}
+                isSaving={isSavingOrganization}
+                notice={organizationNotice}
+                onChange={setOrganizationForm}
+                onSubmit={handleOrganizationSubmit}
+              />
+
+              <CatalogUsersPanel
+                form={userForm}
+                isSaving={isSavingUser}
+                mode={selectedUser ? userMode : userMode.mode === "edit" ? { mode: "create" } : userMode}
+                notice={userNotice}
+                onCancel={handleCancelEditUser}
+                onChange={setUserForm}
+                onStartCreate={handleStartCreateUser}
+                onStartEdit={handleStartEditUser}
+                onSubmit={handleUserSubmit}
+                users={workspaceData.users}
+              />
+            </div>
+          ) : null}
         </>
       ) : null}
     </section>

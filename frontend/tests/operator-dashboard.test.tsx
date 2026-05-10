@@ -24,14 +24,58 @@ vi.mock("../lib/auth", async () => {
     ...actual,
     logout: vi.fn(),
     readProtectedWhoAmI: vi.fn(),
-    runVaultAccessProbe: vi.fn(),
   };
 });
 
-const { logout, readProtectedWhoAmI, runVaultAccessProbe } = await import("../lib/auth");
+vi.mock("../lib/catalog", async () => {
+  const actual = await vi.importActual<typeof import("../lib/catalog")>("../lib/catalog");
+
+  return {
+    ...actual,
+    readCatalogWorkspace: vi.fn(),
+    updateOrganization: vi.fn(),
+    createCatalogUser: vi.fn(),
+    updateCatalogUser: vi.fn(),
+  };
+});
+
+const { logout, readProtectedWhoAmI } = await import("../lib/auth");
+const {
+  createCatalogUser,
+  readCatalogWorkspace,
+  updateCatalogUser,
+  updateOrganization,
+} = await import("../lib/catalog");
+
 const logoutMock = vi.mocked(logout);
 const readProtectedWhoAmIMock = vi.mocked(readProtectedWhoAmI);
-const runVaultAccessProbeMock = vi.mocked(runVaultAccessProbe);
+const readCatalogWorkspaceMock = vi.mocked(readCatalogWorkspace);
+const updateOrganizationMock = vi.mocked(updateOrganization);
+const createCatalogUserMock = vi.mocked(createCatalogUser);
+const updateCatalogUserMock = vi.mocked(updateCatalogUser);
+
+const workspaceFixture = {
+  organization: {
+    id: "org_123",
+    slug: "passark",
+    display_name: "PassArk",
+    description: "Primary org",
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+  },
+  users: [
+    {
+      id: "cu_ada",
+      organization_id: "org_123",
+      email: "ada@example.com",
+      full_name: "Ada Lovelace",
+      job_title: "Analyst",
+      is_active: true,
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+};
 
 describe("OperatorPage", () => {
   beforeEach(() => {
@@ -40,31 +84,32 @@ describe("OperatorPage", () => {
     refreshMock.mockReset();
     logoutMock.mockReset();
     readProtectedWhoAmIMock.mockReset();
-    runVaultAccessProbeMock.mockReset();
+    readCatalogWorkspaceMock.mockReset();
+    updateOrganizationMock.mockReset();
+    createCatalogUserMock.mockReset();
+    updateCatalogUserMock.mockReset();
   });
 
-  it("renders the protected operator dashboard after the backend session resolves", async () => {
+  it("renders the real catalog workspace after the backend session resolves", async () => {
     readProtectedWhoAmIMock.mockResolvedValueOnce({
       user: { id: 1, email: "admin@passark.local", is_active: true },
       session_id: 42,
     });
+    readCatalogWorkspaceMock.mockResolvedValueOnce(workspaceFixture);
 
     render(<OperatorPage />);
 
     await waitFor(() => {
       expect(readProtectedWhoAmIMock).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(screen.getByText("admin@passark.local")).toBeInTheDocument();
+      expect(readCatalogWorkspaceMock).toHaveBeenCalledTimes(1);
     });
 
-    expect(screen.getByText(/session #42/i)).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("PassArk")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Primary org")).toBeInTheDocument();
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("ada@example.com")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /run vault access probe/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/stable backend error codes/i),
+      screen.getByText(/validation, conflict, and audit-write failures remain visible/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/session token/i)).not.toBeInTheDocument();
   });
@@ -97,97 +142,12 @@ describe("OperatorPage", () => {
     expect(replaceMock).not.toHaveBeenCalled();
   });
 
-  it("shows audited protected-action success details after the vault probe completes", async () => {
+  it("logs out and routes back to sign-in", async () => {
     readProtectedWhoAmIMock.mockResolvedValueOnce({
       user: { id: 1, email: "admin@passark.local", is_active: true },
       session_id: 7,
     });
-    runVaultAccessProbeMock.mockResolvedValueOnce({
-      operation: "vault_access_probe",
-      status: "allowed",
-      actor_id: 1,
-      audit_event_id: 91,
-    });
-
-    render(<OperatorPage />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run vault access probe/i })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /run vault access probe/i }));
-
-    await waitFor(() => {
-      expect(runVaultAccessProbeMock).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(screen.getByText(/protected action allowed/i)).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/operation/i)).toBeInTheDocument();
-    expect(screen.getByText(/vault_access_probe/i)).toBeInTheDocument();
-    expect(screen.getByText("Status: allowed")).toBeInTheDocument();
-    expect(screen.getByText("Audit event: #91")).toBeInTheDocument();
-  });
-
-  it("surfaces audited protected-action failures with backend failure codes", async () => {
-    readProtectedWhoAmIMock.mockResolvedValueOnce({
-      user: { id: 1, email: "admin@passark.local", is_active: true },
-      session_id: 7,
-    });
-    runVaultAccessProbeMock.mockRejectedValueOnce(
-      new AuthApiRequestError(503, "Audit logging is unavailable.", "audit_unavailable"),
-    );
-
-    render(<OperatorPage />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run vault access probe/i })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /run vault access probe/i }));
-
-    await waitFor(() => {
-      expect(runVaultAccessProbeMock).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(screen.getByText("Failure code: audit_unavailable")).toBeInTheDocument();
-    });
-
-    expect(screen.getByText(/protected action failed/i)).toBeInTheDocument();
-    expect(screen.getByText("Audit logging is unavailable.")).toBeInTheDocument();
-  });
-
-  it("returns to sign-in if the audited action discovers an expired session", async () => {
-    readProtectedWhoAmIMock.mockResolvedValueOnce({
-      user: { id: 1, email: "admin@passark.local", is_active: true },
-      session_id: 7,
-    });
-    runVaultAccessProbeMock.mockRejectedValueOnce(
-      new AuthApiRequestError(401, "Authentication required.", "auth_unauthenticated"),
-    );
-
-    render(<OperatorPage />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /run vault access probe/i })).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /run vault access probe/i }));
-
-    await waitFor(() => {
-      expect(runVaultAccessProbeMock).toHaveBeenCalledTimes(1);
-      expect(replaceMock).toHaveBeenCalledWith("/login?reason=unauthenticated");
-    });
-
-    expect(screen.getByText(/authentication required/i)).toBeInTheDocument();
-    expect(
-      screen.getByText(/your backend session is missing or expired/i),
-    ).toBeInTheDocument();
-  });
-
-  it("issues logout and routes back to sign-in", async () => {
-    readProtectedWhoAmIMock.mockResolvedValueOnce({
-      user: { id: 1, email: "admin@passark.local", is_active: true },
-      session_id: 7,
-    });
+    readCatalogWorkspaceMock.mockResolvedValueOnce(workspaceFixture);
     logoutMock.mockResolvedValueOnce();
 
     render(<OperatorPage />);
@@ -202,5 +162,30 @@ describe("OperatorPage", () => {
       expect(pushMock).toHaveBeenCalledWith("/login?reason=signed-out");
       expect(refreshMock).toHaveBeenCalled();
     });
+  });
+
+  it("surfaces catalog workspace bootstrap failures with stable failure codes", async () => {
+    readProtectedWhoAmIMock.mockResolvedValueOnce({
+      user: { id: 1, email: "admin@passark.local", is_active: true },
+      session_id: 7,
+    });
+    readCatalogWorkspaceMock.mockRejectedValueOnce(
+      new AuthApiRequestError(
+        503,
+        "Audit logging is required for organization updates.",
+        "organization_update_audit_unavailable",
+      ),
+    );
+
+    render(<OperatorPage />);
+
+    await waitFor(() => {
+      expect(readCatalogWorkspaceMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByText(/unable to load catalog workspace/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("Failure code: organization_update_audit_unavailable"),
+    ).toBeInTheDocument();
   });
 });
