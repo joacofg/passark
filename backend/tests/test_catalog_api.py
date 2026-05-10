@@ -2,7 +2,15 @@ from datetime import UTC, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.db.base import AuditEvent, CatalogUser, Organization
+from app.db.base import (
+    AuditEvent,
+    CatalogUser,
+    DirectRoleAssignment,
+    Organization,
+    ScopedRole,
+    Team,
+    TeamMembership,
+)
 from app.db.session import SensitiveOperationAuditWriter
 from tests.test_auth import login_as_admin
 
@@ -18,6 +26,42 @@ def test_catalog_endpoints_require_authentication(client):
     }
 
     response = client.get("/api/v1/catalog/users")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/teams")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/roles")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/memberships")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/assignments")
     assert response.status_code == 401
     assert response.json() == {
         "detail": {
@@ -275,6 +319,372 @@ def test_update_catalog_user_rejects_missing_record(client):
 
     assert response.status_code == 404
     assert response.json() == {
+        "detail": {
+            "code": "catalog_user_not_found",
+            "message": "Catalog user was not found.",
+        }
+    }
+
+
+def test_team_and_scoped_role_catalog_happy_paths(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    db_session.add(organization)
+    db_session.commit()
+
+    team_response = client.post(
+        "/api/v1/catalog/teams",
+        json={"name": " Platform Engineering ", "description": "Owns backend systems "},
+    )
+    assert team_response.status_code == 201
+    team = team_response.json()["team"]
+    assert team["id"].startswith("team_")
+    assert team["organization_id"] == "org_fixture"
+    assert team["name"] == "Platform Engineering"
+    assert team["description"] == "Owns backend systems"
+
+    org_role_response = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Org Admin",
+            "description": "Deployment-level operator",
+            "scope_type": "organization",
+            "scope_id": "org_fixture",
+        },
+    )
+    assert org_role_response.status_code == 201
+    org_role = org_role_response.json()["scoped_role"]
+    assert org_role["id"].startswith("role_")
+    assert org_role["scope_type"] == "organization"
+    assert org_role["scope_id"] == "org_fixture"
+
+    team_role_response = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Team Maintainer",
+            "description": "Maintains the team resources",
+            "scope_type": "team",
+            "scope_id": team["id"],
+        },
+    )
+    assert team_role_response.status_code == 201
+    team_role = team_role_response.json()["scoped_role"]
+    assert team_role["scope_type"] == "team"
+    assert team_role["scope_id"] == team["id"]
+
+    list_teams = client.get("/api/v1/catalog/teams")
+    assert list_teams.status_code == 200
+    assert list_teams.json()["items"] == [team]
+
+    list_roles = client.get("/api/v1/catalog/roles")
+    assert list_roles.status_code == 200
+    assert [item["id"] for item in list_roles.json()["items"]] == [org_role["id"], team_role["id"]]
+
+    stored_team = db_session.query(Team).filter_by(id=team["id"]).one()
+    stored_org_role = db_session.query(ScopedRole).filter_by(id=org_role["id"]).one()
+    stored_team_role = db_session.query(ScopedRole).filter_by(id=team_role["id"]).one()
+    assert stored_team.organization_id == organization.id
+    assert stored_org_role.scope_type == "organization"
+    assert stored_team_role.scope_type == "team"
+
+
+def test_team_and_role_conflicts_return_stable_error_codes(client):
+    login_as_admin(client)
+    client.get("/api/v1/catalog/organization")
+
+    first_team = client.post(
+        "/api/v1/catalog/teams",
+        json={"name": "Security", "description": "Handles review"},
+    )
+    assert first_team.status_code == 201
+
+    duplicate_team = client.post(
+        "/api/v1/catalog/teams",
+        json={"name": "Security", "description": "Duplicate"},
+    )
+    assert duplicate_team.status_code == 409
+    assert duplicate_team.json() == {
+        "detail": {
+            "code": "team_conflict",
+            "message": "Team already exists.",
+        }
+    }
+
+    org = client.get("/api/v1/catalog/organization").json()
+    first_role = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Auditor",
+            "description": "Read-only role",
+            "scope_type": "organization",
+            "scope_id": org["id"],
+        },
+    )
+    assert first_role.status_code == 201
+
+    duplicate_role = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Auditor",
+            "description": "Duplicate role",
+            "scope_type": "organization",
+            "scope_id": org["id"],
+        },
+    )
+    assert duplicate_role.status_code == 409
+    assert duplicate_role.json() == {
+        "detail": {
+            "code": "scoped_role_conflict",
+            "message": "Scoped role already exists.",
+        }
+    }
+
+
+def test_create_scoped_role_rejects_invalid_scope_container_combinations(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    db_session.add(organization)
+    db_session.commit()
+
+    wrong_org_scope = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Org Admin",
+            "description": "Bad org scope",
+            "scope_type": "organization",
+            "scope_id": "org_other",
+        },
+    )
+    assert wrong_org_scope.status_code == 422
+    assert wrong_org_scope.json() == {
+        "detail": {
+            "code": "scoped_role_scope_mismatch",
+            "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
+        }
+    }
+
+    unknown_team_scope = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Team Maintainer",
+            "description": "Bad team scope",
+            "scope_type": "team",
+            "scope_id": "team_missing",
+        },
+    )
+    assert unknown_team_scope.status_code == 422
+    assert unknown_team_scope.json() == {
+        "detail": {
+            "code": "scoped_role_scope_mismatch",
+            "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
+        }
+    }
+
+    unknown_scope_type = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Mystery Role",
+            "description": "Bad scope type",
+            "scope_type": "project",
+            "scope_id": "proj_123",
+        },
+    )
+    assert unknown_scope_type.status_code == 422
+    assert unknown_scope_type.json() == {
+        "detail": {
+            "code": "scoped_role_scope_mismatch",
+            "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
+        }
+    }
+
+
+def test_memberships_and_assignments_support_happy_paths_and_observable_listing(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    catalog_user = CatalogUser(
+        id="cu_fixture",
+        organization_id=organization.id,
+        email="operator@example.com",
+        full_name="Operator User",
+        job_title="Ops Lead",
+        is_active=True,
+    )
+    team = Team(
+        id="team_fixture",
+        organization_id=organization.id,
+        name="Security",
+        description="Handles review",
+    )
+    scoped_role = ScopedRole(
+        id="role_fixture",
+        organization_id=organization.id,
+        name="Team Maintainer",
+        description="Maintains team resources",
+        scope_type="team",
+        scope_id=team.id,
+    )
+    db_session.add_all([organization, catalog_user, team, scoped_role])
+    db_session.commit()
+
+    membership_response = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert membership_response.status_code == 201
+    membership = membership_response.json()["membership"]
+    assert membership["id"].startswith("tm_")
+    assert membership["team_id"] == "team_fixture"
+    assert membership["catalog_user_id"] == "cu_fixture"
+
+    assignment_response = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": "role_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert assignment_response.status_code == 201
+    assignment = assignment_response.json()["assignment"]
+    assert assignment["id"].startswith("dra_")
+    assert assignment["scoped_role_id"] == "role_fixture"
+    assert assignment["catalog_user_id"] == "cu_fixture"
+
+    membership_list = client.get("/api/v1/catalog/memberships")
+    assignment_list = client.get("/api/v1/catalog/assignments")
+    assert membership_list.status_code == 200
+    assert membership_list.json()["items"] == [membership]
+    assert assignment_list.status_code == 200
+    assert assignment_list.json()["items"] == [assignment]
+
+    stored_membership = db_session.query(TeamMembership).filter_by(id=membership["id"]).one()
+    stored_assignment = db_session.query(DirectRoleAssignment).filter_by(id=assignment["id"]).one()
+    assert stored_membership.team_id == team.id
+    assert stored_assignment.scoped_role_id == scoped_role.id
+
+
+def test_membership_and_assignment_failures_return_stable_machine_readable_codes(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    catalog_user = CatalogUser(
+        id="cu_fixture",
+        organization_id=organization.id,
+        email="operator@example.com",
+        full_name="Operator User",
+        job_title="Ops Lead",
+        is_active=True,
+    )
+    team = Team(
+        id="team_fixture",
+        organization_id=organization.id,
+        name="Security",
+        description="Handles review",
+    )
+    scoped_role = ScopedRole(
+        id="role_fixture",
+        organization_id=organization.id,
+        name="Team Maintainer",
+        description="Maintains team resources",
+        scope_type="team",
+        scope_id=team.id,
+    )
+    db_session.add_all([organization, catalog_user, team, scoped_role])
+    db_session.commit()
+
+    first_membership = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert first_membership.status_code == 201
+
+    duplicate_membership = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert duplicate_membership.status_code == 409
+    assert duplicate_membership.json() == {
+        "detail": {
+            "code": "team_membership_conflict",
+            "message": "Catalog user is already a member of this team.",
+        }
+    }
+
+    missing_team = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_missing", "catalog_user_id": "cu_fixture"},
+    )
+    assert missing_team.status_code == 404
+    assert missing_team.json() == {
+        "detail": {
+            "code": "team_not_found",
+            "message": "Team was not found.",
+        }
+    }
+
+    missing_membership_user = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_fixture", "catalog_user_id": "cu_missing"},
+    )
+    assert missing_membership_user.status_code == 404
+    assert missing_membership_user.json() == {
+        "detail": {
+            "code": "catalog_user_not_found",
+            "message": "Catalog user was not found.",
+        }
+    }
+
+    first_assignment = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": "role_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert first_assignment.status_code == 201
+
+    duplicate_assignment = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": "role_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert duplicate_assignment.status_code == 409
+    assert duplicate_assignment.json() == {
+        "detail": {
+            "code": "direct_role_assignment_conflict",
+            "message": "Catalog user already has this scoped role.",
+        }
+    }
+
+    missing_role = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": "role_missing", "catalog_user_id": "cu_fixture"},
+    )
+    assert missing_role.status_code == 404
+    assert missing_role.json() == {
+        "detail": {
+            "code": "scoped_role_not_found",
+            "message": "Scoped role was not found.",
+        }
+    }
+
+    missing_assignment_user = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": "role_fixture", "catalog_user_id": "cu_missing"},
+    )
+    assert missing_assignment_user.status_code == 404
+    assert missing_assignment_user.json() == {
         "detail": {
             "code": "catalog_user_not_found",
             "message": "Catalog user was not found.",

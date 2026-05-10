@@ -8,7 +8,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session as OrmSession
 
-from app.db.base import AuditEvent, CatalogUser, Organization, User
+from app.db.base import (
+    AuditEvent,
+    CatalogUser,
+    DirectRoleAssignment,
+    Organization,
+    ScopedRole,
+    Team,
+    TeamMembership,
+    User,
+)
 from app.db.session import (
     SensitiveOperationAuditWriter,
     get_auth_error,
@@ -20,6 +29,7 @@ router = APIRouter(prefix="/catalog", tags=["catalog"])
 
 ORGANIZATION_BOOTSTRAP_NAME = "PassArk"
 ORGANIZATION_CODE = "organization_singleton"
+DEFAULT_SCOPE_TYPE = "organization"
 CATALOG_DUPLICATE_ERROR = {
     "code": "catalog_user_conflict",
     "message": "Catalog user already exists.",
@@ -32,6 +42,35 @@ ORGANIZATION_UPDATE_AUDIT_ERROR = {
     "code": "organization_update_audit_unavailable",
     "message": "Audit logging is required for organization updates.",
 }
+TEAM_DUPLICATE_ERROR = {
+    "code": "team_conflict",
+    "message": "Team already exists.",
+}
+TEAM_NOT_FOUND_ERROR = {
+    "code": "team_not_found",
+    "message": "Team was not found.",
+}
+SCOPED_ROLE_DUPLICATE_ERROR = {
+    "code": "scoped_role_conflict",
+    "message": "Scoped role already exists.",
+}
+SCOPED_ROLE_NOT_FOUND_ERROR = {
+    "code": "scoped_role_not_found",
+    "message": "Scoped role was not found.",
+}
+TEAM_MEMBERSHIP_DUPLICATE_ERROR = {
+    "code": "team_membership_conflict",
+    "message": "Catalog user is already a member of this team.",
+}
+DIRECT_ROLE_ASSIGNMENT_DUPLICATE_ERROR = {
+    "code": "direct_role_assignment_conflict",
+    "message": "Catalog user already has this scoped role.",
+}
+SCOPE_MISMATCH_ERROR = {
+    "code": "scoped_role_scope_mismatch",
+    "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
+}
+ALLOWED_SCOPE_TYPES = {DEFAULT_SCOPE_TYPE, "team"}
 
 
 class OrganizationResponse(BaseModel):
@@ -90,8 +129,108 @@ class CatalogUserMutationResponse(BaseModel):
     catalog_user: CatalogUserResponse
 
 
+class TeamResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    description: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class TeamListResponse(BaseModel):
+    items: list[TeamResponse]
+
+
+class TeamMutationResponse(BaseModel):
+    team: TeamResponse
+
+
+class ScopedRoleResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    description: str | None
+    scope_type: str
+    scope_id: str
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ScopedRoleCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    scope_type: str = Field(min_length=1, max_length=32)
+    scope_id: str = Field(min_length=1, max_length=64)
+
+
+class ScopedRoleListResponse(BaseModel):
+    items: list[ScopedRoleResponse]
+
+
+class ScopedRoleMutationResponse(BaseModel):
+    scoped_role: ScopedRoleResponse
+
+
+class TeamMembershipResponse(BaseModel):
+    id: str
+    team_id: str
+    catalog_user_id: str
+    created_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeamMembershipCreateRequest(BaseModel):
+    team_id: str = Field(min_length=1, max_length=64)
+    catalog_user_id: str = Field(min_length=1, max_length=64)
+
+
+class TeamMembershipListResponse(BaseModel):
+    items: list[TeamMembershipResponse]
+
+
+class TeamMembershipMutationResponse(BaseModel):
+    membership: TeamMembershipResponse
+
+
+class DirectRoleAssignmentResponse(BaseModel):
+    id: str
+    scoped_role_id: str
+    catalog_user_id: str
+    created_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DirectRoleAssignmentCreateRequest(BaseModel):
+    scoped_role_id: str = Field(min_length=1, max_length=64)
+    catalog_user_id: str = Field(min_length=1, max_length=64)
+
+
+class DirectRoleAssignmentListResponse(BaseModel):
+    items: list[DirectRoleAssignmentResponse]
+
+
+class DirectRoleAssignmentMutationResponse(BaseModel):
+    assignment: DirectRoleAssignmentResponse
+
+
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def _normalize_required_text(value: str) -> str:
+    return value.strip()
 
 
 def _normalize_optional_text(value: str | None) -> str | None:
@@ -129,6 +268,56 @@ def _serialize_catalog_user(catalog_user: CatalogUser) -> CatalogUserResponse:
     )
 
 
+def _serialize_team(team: Team) -> TeamResponse:
+    return TeamResponse.model_validate(
+        {
+            "id": team.id,
+            "organization_id": team.organization_id,
+            "name": team.name,
+            "description": team.description,
+            "created_at": team.created_at.isoformat(),
+            "updated_at": team.updated_at.isoformat(),
+        }
+    )
+
+
+def _serialize_scoped_role(scoped_role: ScopedRole) -> ScopedRoleResponse:
+    return ScopedRoleResponse.model_validate(
+        {
+            "id": scoped_role.id,
+            "organization_id": scoped_role.organization_id,
+            "name": scoped_role.name,
+            "description": scoped_role.description,
+            "scope_type": scoped_role.scope_type,
+            "scope_id": scoped_role.scope_id,
+            "created_at": scoped_role.created_at.isoformat(),
+            "updated_at": scoped_role.updated_at.isoformat(),
+        }
+    )
+
+
+def _serialize_team_membership(membership: TeamMembership) -> TeamMembershipResponse:
+    return TeamMembershipResponse.model_validate(
+        {
+            "id": membership.id,
+            "team_id": membership.team_id,
+            "catalog_user_id": membership.catalog_user_id,
+            "created_at": membership.created_at.isoformat(),
+        }
+    )
+
+
+def _serialize_direct_role_assignment(assignment: DirectRoleAssignment) -> DirectRoleAssignmentResponse:
+    return DirectRoleAssignmentResponse.model_validate(
+        {
+            "id": assignment.id,
+            "scoped_role_id": assignment.scoped_role_id,
+            "catalog_user_id": assignment.catalog_user_id,
+            "created_at": assignment.created_at.isoformat(),
+        }
+    )
+
+
 def _get_or_create_organization_root(db: OrmSession) -> Organization:
     organization = db.scalar(select(Organization).where(Organization.singleton_key == ORGANIZATION_CODE))
     if organization is not None:
@@ -149,6 +338,61 @@ def _get_or_create_organization_root(db: OrmSession) -> Organization:
 
 def _raise_duplicate_catalog_user() -> None:
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CATALOG_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_team() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TEAM_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_scoped_role() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SCOPED_ROLE_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_team_membership() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=TEAM_MEMBERSHIP_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_direct_role_assignment() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DIRECT_ROLE_ASSIGNMENT_DUPLICATE_ERROR)
+
+
+def _validate_scope(organization: Organization, scope_type: str, scope_id: str, db: OrmSession) -> tuple[str, str]:
+    normalized_scope_type = scope_type.strip().lower()
+    normalized_scope_id = scope_id.strip()
+
+    if normalized_scope_type not in ALLOWED_SCOPE_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=SCOPE_MISMATCH_ERROR)
+
+    if normalized_scope_type == DEFAULT_SCOPE_TYPE:
+        if normalized_scope_id != organization.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=SCOPE_MISMATCH_ERROR)
+        return normalized_scope_type, normalized_scope_id
+
+    team = db.scalar(select(Team).where(Team.id == normalized_scope_id))
+    if team is None or team.organization_id != organization.id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=SCOPE_MISMATCH_ERROR)
+    return normalized_scope_type, normalized_scope_id
+
+
+def _get_catalog_user_or_404(catalog_user_id: str, organization_id: str, db: OrmSession) -> CatalogUser:
+    catalog_user = db.scalar(select(CatalogUser).where(CatalogUser.id == catalog_user_id))
+    if catalog_user is None or catalog_user.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=CATALOG_NOT_FOUND_ERROR)
+    return catalog_user
+
+
+def _get_team_or_404(team_id: str, organization_id: str, db: OrmSession) -> Team:
+    team = db.scalar(select(Team).where(Team.id == team_id))
+    if team is None or team.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=TEAM_NOT_FOUND_ERROR)
+    return team
+
+
+def _get_scoped_role_or_404(scoped_role_id: str, organization_id: str, db: OrmSession) -> ScopedRole:
+    scoped_role = db.scalar(select(ScopedRole).where(ScopedRole.id == scoped_role_id))
+    if scoped_role is None or scoped_role.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=SCOPED_ROLE_NOT_FOUND_ERROR)
+    return scoped_role
 
 
 @router.get("/organization", response_model=OrganizationResponse)
@@ -262,3 +506,173 @@ def update_catalog_user(
     db.commit()
     db.refresh(catalog_user)
     return CatalogUserMutationResponse(catalog_user=_serialize_catalog_user(catalog_user))
+
+
+@router.get("/teams", response_model=TeamListResponse)
+def list_teams(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> TeamListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(Team)
+        .where(Team.organization_id == organization.id)
+        .order_by(Team.name.asc(), Team.id.asc())
+    ).all()
+    return TeamListResponse(items=[_serialize_team(item) for item in items])
+
+
+@router.post("/teams", response_model=TeamMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_team(
+    payload: TeamCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> TeamMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    team = Team(
+        id=f"team_{uuid4().hex}",
+        organization_id=organization.id,
+        name=_normalize_required_text(payload.name),
+        description=_normalize_optional_text(payload.description),
+    )
+    db.add(team)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_duplicate_team()
+    db.refresh(team)
+    return TeamMutationResponse(team=_serialize_team(team))
+
+
+@router.get("/roles", response_model=ScopedRoleListResponse)
+def list_scoped_roles(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ScopedRoleListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(ScopedRole)
+        .where(ScopedRole.organization_id == organization.id)
+        .order_by(ScopedRole.scope_type.asc(), ScopedRole.name.asc(), ScopedRole.id.asc())
+    ).all()
+    return ScopedRoleListResponse(items=[_serialize_scoped_role(item) for item in items])
+
+
+@router.post("/roles", response_model=ScopedRoleMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_scoped_role(
+    payload: ScopedRoleCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ScopedRoleMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    normalized_scope_type, normalized_scope_id = _validate_scope(
+        organization,
+        payload.scope_type,
+        payload.scope_id,
+        db,
+    )
+    scoped_role = ScopedRole(
+        id=f"role_{uuid4().hex}",
+        organization_id=organization.id,
+        name=_normalize_required_text(payload.name),
+        description=_normalize_optional_text(payload.description),
+        scope_type=normalized_scope_type,
+        scope_id=normalized_scope_id,
+    )
+    db.add(scoped_role)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_duplicate_scoped_role()
+    db.refresh(scoped_role)
+    return ScopedRoleMutationResponse(scoped_role=_serialize_scoped_role(scoped_role))
+
+
+@router.get("/memberships", response_model=TeamMembershipListResponse)
+def list_team_memberships(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> TeamMembershipListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(TeamMembership)
+        .join(Team, Team.id == TeamMembership.team_id)
+        .where(Team.organization_id == organization.id)
+        .order_by(TeamMembership.created_at.asc(), TeamMembership.id.asc())
+    ).all()
+    return TeamMembershipListResponse(items=[_serialize_team_membership(item) for item in items])
+
+
+@router.post("/memberships", response_model=TeamMembershipMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_team_membership(
+    payload: TeamMembershipCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> TeamMembershipMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    team = _get_team_or_404(payload.team_id.strip(), organization.id, db)
+    catalog_user = _get_catalog_user_or_404(payload.catalog_user_id.strip(), organization.id, db)
+
+    membership = TeamMembership(
+        id=f"tm_{uuid4().hex}",
+        team_id=team.id,
+        catalog_user_id=catalog_user.id,
+    )
+    db.add(membership)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_duplicate_team_membership()
+    db.refresh(membership)
+    return TeamMembershipMutationResponse(membership=_serialize_team_membership(membership))
+
+
+@router.get("/assignments", response_model=DirectRoleAssignmentListResponse)
+def list_direct_role_assignments(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> DirectRoleAssignmentListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(DirectRoleAssignment)
+        .join(ScopedRole, ScopedRole.id == DirectRoleAssignment.scoped_role_id)
+        .where(ScopedRole.organization_id == organization.id)
+        .order_by(DirectRoleAssignment.created_at.asc(), DirectRoleAssignment.id.asc())
+    ).all()
+    return DirectRoleAssignmentListResponse(items=[_serialize_direct_role_assignment(item) for item in items])
+
+
+@router.post("/assignments", response_model=DirectRoleAssignmentMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_direct_role_assignment(
+    payload: DirectRoleAssignmentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> DirectRoleAssignmentMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    scoped_role = _get_scoped_role_or_404(payload.scoped_role_id.strip(), organization.id, db)
+    catalog_user = _get_catalog_user_or_404(payload.catalog_user_id.strip(), organization.id, db)
+
+    assignment = DirectRoleAssignment(
+        id=f"dra_{uuid4().hex}",
+        scoped_role_id=scoped_role.id,
+        catalog_user_id=catalog_user.id,
+    )
+    db.add(assignment)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        _raise_duplicate_direct_role_assignment()
+    db.refresh(assignment)
+    return DirectRoleAssignmentMutationResponse(assignment=_serialize_direct_role_assignment(assignment))
