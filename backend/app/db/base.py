@@ -108,6 +108,22 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
+    apps: Mapped[list["App"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    projects: Mapped[list["Project"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    environments: Mapped[list["Environment"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    resources: Mapped[list["Resource"]] = relationship(
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
 
 
 class CatalogUser(Base):
@@ -279,6 +295,173 @@ class DirectRoleAssignment(Base):
 
     scoped_role: Mapped[ScopedRole] = relationship(back_populates="role_assignments")
     catalog_user: Mapped[CatalogUser] = relationship(back_populates="role_assignments")
+
+
+class App(Base):
+    __tablename__ = "apps"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "name", name="uq_apps_organization_id_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="apps")
+    projects: Mapped[list["Project"]] = relationship(
+        back_populates="app",
+        cascade="all, delete-orphan",
+    )
+    resources: Mapped[list["Resource"]] = relationship(back_populates="app")
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "app_id", "name", name="uq_projects_organization_app_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    app_id: Mapped[str] = mapped_column(
+        ForeignKey("apps.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="projects")
+    app: Mapped[App] = relationship(back_populates="projects")
+    environments: Mapped[list["Environment"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    resources: Mapped[list["Resource"]] = relationship(back_populates="project")
+
+
+class Environment(Base):
+    __tablename__ = "environments"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "project_id",
+            "name",
+            name="uq_environments_organization_project_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text())
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="environments")
+    project: Mapped[Project] = relationship(back_populates="environments")
+    resources: Mapped[list["Resource"]] = relationship(back_populates="environment")
+
+
+class Resource(Base):
+    __tablename__ = "resources"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id",
+            "container_type",
+            "container_id",
+            "scope_type",
+            "scope_id",
+            "name",
+            name="uq_resources_catalog_container_scope_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    app_id: Mapped[str | None] = mapped_column(ForeignKey("apps.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    environment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("environments.id", ondelete="CASCADE"),
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    container_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    container_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text())
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(_json_metadata_type(), default=dict, nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    organization: Mapped[Organization] = relationship(back_populates="resources")
+    app: Mapped[App | None] = relationship(back_populates="resources")
+    project: Mapped[Project | None] = relationship(back_populates="resources")
+    environment: Mapped[Environment | None] = relationship(back_populates="resources")
 
 
 class AuditEvent(Base):

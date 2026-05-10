@@ -9,10 +9,14 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session as OrmSession
 
 from app.db.base import (
+    App,
     AuditEvent,
     CatalogUser,
     DirectRoleAssignment,
+    Environment,
     Organization,
+    Project,
+    Resource,
     ScopedRole,
     Team,
     TeamMembership,
@@ -20,7 +24,6 @@ from app.db.base import (
 )
 from app.db.session import (
     SensitiveOperationAuditWriter,
-    get_auth_error,
     get_current_user,
     get_db,
 )
@@ -70,7 +73,64 @@ SCOPE_MISMATCH_ERROR = {
     "code": "scoped_role_scope_mismatch",
     "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
 }
+APP_DUPLICATE_ERROR = {
+    "code": "app_conflict",
+    "message": "App already exists.",
+}
+APP_NOT_FOUND_ERROR = {
+    "code": "app_not_found",
+    "message": "App was not found.",
+}
+PROJECT_DUPLICATE_ERROR = {
+    "code": "project_conflict",
+    "message": "Project already exists for this app.",
+}
+PROJECT_NOT_FOUND_ERROR = {
+    "code": "project_not_found",
+    "message": "Project was not found.",
+}
+ENVIRONMENT_DUPLICATE_ERROR = {
+    "code": "environment_conflict",
+    "message": "Environment already exists for this project.",
+}
+ENVIRONMENT_NOT_FOUND_ERROR = {
+    "code": "environment_not_found",
+    "message": "Environment was not found.",
+}
+RESOURCE_DUPLICATE_ERROR = {
+    "code": "resource_conflict",
+    "message": "Resource already exists for this container and scope.",
+}
+RESOURCE_SCOPE_MISMATCH_ERROR = {
+    "code": "resource_scope_mismatch",
+    "message": "Resource scope_type and scope_id do not match a valid catalog hierarchy.",
+}
+RESOURCE_CONTAINER_MISMATCH_ERROR = {
+    "code": "resource_container_mismatch",
+    "message": "Resource container_type and container_id do not match a valid catalog container.",
+}
+RESOURCE_SECRET_PAYLOAD_ERROR = {
+    "code": "resource_secret_payload_forbidden",
+    "message": "Resource metadata must stay descriptive and cannot store secret payloads.",
+}
+RESOURCE_NOT_FOUND_ERROR = {
+    "code": "resource_not_found",
+    "message": "Resource was not found.",
+}
 ALLOWED_SCOPE_TYPES = {DEFAULT_SCOPE_TYPE, "team"}
+ALLOWED_RESOURCE_TYPES = {"database", "bucket", "queue", "service_account", "certificate", "secret_ref"}
+ALLOWED_RESOURCE_CONTAINER_TYPES = {"app", "project", "environment"}
+FORBIDDEN_RESOURCE_METADATA_KEYS = {
+    "secret",
+    "secret_value",
+    "secret_payload",
+    "private_key",
+    "password",
+    "token",
+    "credential",
+    "credentials",
+    "value",
+}
 
 
 class OrganizationResponse(BaseModel):
@@ -225,6 +285,121 @@ class DirectRoleAssignmentMutationResponse(BaseModel):
     assignment: DirectRoleAssignmentResponse
 
 
+class AppResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    description: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AppCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class AppListResponse(BaseModel):
+    items: list[AppResponse]
+
+
+class AppMutationResponse(BaseModel):
+    app: AppResponse
+
+
+class ProjectResponse(BaseModel):
+    id: str
+    organization_id: str
+    app_id: str
+    name: str
+    description: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectCreateRequest(BaseModel):
+    app_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class ProjectListResponse(BaseModel):
+    items: list[ProjectResponse]
+
+
+class ProjectMutationResponse(BaseModel):
+    project: ProjectResponse
+
+
+class EnvironmentResponse(BaseModel):
+    id: str
+    organization_id: str
+    project_id: str
+    name: str
+    description: str | None
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class EnvironmentCreateRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class EnvironmentListResponse(BaseModel):
+    items: list[EnvironmentResponse]
+
+
+class EnvironmentMutationResponse(BaseModel):
+    environment: EnvironmentResponse
+
+
+class ResourceResponse(BaseModel):
+    id: str
+    organization_id: str
+    app_id: str | None
+    project_id: str | None
+    environment_id: str | None
+    name: str
+    resource_type: str
+    container_type: str
+    container_id: str
+    scope_type: str
+    scope_id: str
+    description: str | None
+    metadata: dict[str, str]
+    created_at: str
+    updated_at: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ResourceCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    resource_type: str = Field(min_length=1, max_length=32)
+    container_type: str = Field(min_length=1, max_length=32)
+    container_id: str = Field(min_length=1, max_length=64)
+    scope_type: str = Field(min_length=1, max_length=32)
+    scope_id: str = Field(min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=2000)
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
+class ResourceListResponse(BaseModel):
+    items: list[ResourceResponse]
+
+
+class ResourceMutationResponse(BaseModel):
+    resource: ResourceResponse
+
+
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -238,6 +413,17 @@ def _normalize_optional_text(value: str | None) -> str | None:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _normalize_metadata(metadata: dict[str, str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in metadata.items():
+        normalized_key = key.strip().lower().replace("-", "_")
+        normalized_value = value.strip()
+        if normalized_key in FORBIDDEN_RESOURCE_METADATA_KEYS:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=RESOURCE_SECRET_PAYLOAD_ERROR)
+        normalized[normalized_key] = normalized_value
+    return normalized
 
 
 def _serialize_organization(organization: Organization) -> OrganizationResponse:
@@ -318,6 +504,69 @@ def _serialize_direct_role_assignment(assignment: DirectRoleAssignment) -> Direc
     )
 
 
+def _serialize_app(app: App) -> AppResponse:
+    return AppResponse.model_validate(
+        {
+            "id": app.id,
+            "organization_id": app.organization_id,
+            "name": app.name,
+            "description": app.description,
+            "created_at": app.created_at.isoformat(),
+            "updated_at": app.updated_at.isoformat(),
+        }
+    )
+
+
+def _serialize_project(project: Project) -> ProjectResponse:
+    return ProjectResponse.model_validate(
+        {
+            "id": project.id,
+            "organization_id": project.organization_id,
+            "app_id": project.app_id,
+            "name": project.name,
+            "description": project.description,
+            "created_at": project.created_at.isoformat(),
+            "updated_at": project.updated_at.isoformat(),
+        }
+    )
+
+
+def _serialize_environment(environment: Environment) -> EnvironmentResponse:
+    return EnvironmentResponse.model_validate(
+        {
+            "id": environment.id,
+            "organization_id": environment.organization_id,
+            "project_id": environment.project_id,
+            "name": environment.name,
+            "description": environment.description,
+            "created_at": environment.created_at.isoformat(),
+            "updated_at": environment.updated_at.isoformat(),
+        }
+    )
+
+
+def _serialize_resource(resource: Resource) -> ResourceResponse:
+    return ResourceResponse.model_validate(
+        {
+            "id": resource.id,
+            "organization_id": resource.organization_id,
+            "app_id": resource.app_id,
+            "project_id": resource.project_id,
+            "environment_id": resource.environment_id,
+            "name": resource.name,
+            "resource_type": resource.resource_type,
+            "container_type": resource.container_type,
+            "container_id": resource.container_id,
+            "scope_type": resource.scope_type,
+            "scope_id": resource.scope_id,
+            "description": resource.description,
+            "metadata": resource.metadata_json,
+            "created_at": resource.created_at.isoformat(),
+            "updated_at": resource.updated_at.isoformat(),
+        }
+    )
+
+
 def _get_or_create_organization_root(db: OrmSession) -> Organization:
     organization = db.scalar(select(Organization).where(Organization.singleton_key == ORGANIZATION_CODE))
     if organization is not None:
@@ -354,6 +603,22 @@ def _raise_duplicate_team_membership() -> None:
 
 def _raise_duplicate_direct_role_assignment() -> None:
     raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DIRECT_ROLE_ASSIGNMENT_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_app() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=APP_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_project() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=PROJECT_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_environment() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=ENVIRONMENT_DUPLICATE_ERROR)
+
+
+def _raise_duplicate_resource() -> None:
+    raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=RESOURCE_DUPLICATE_ERROR)
 
 
 def _validate_scope(organization: Organization, scope_type: str, scope_id: str, db: OrmSession) -> tuple[str, str]:
@@ -393,6 +658,82 @@ def _get_scoped_role_or_404(scoped_role_id: str, organization_id: str, db: OrmSe
     if scoped_role is None or scoped_role.organization_id != organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=SCOPED_ROLE_NOT_FOUND_ERROR)
     return scoped_role
+
+
+def _get_app_or_404(app_id: str, organization_id: str, db: OrmSession) -> App:
+    app = db.scalar(select(App).where(App.id == app_id))
+    if app is None or app.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=APP_NOT_FOUND_ERROR)
+    return app
+
+
+def _get_project_or_404(project_id: str, organization_id: str, db: OrmSession) -> Project:
+    project = db.scalar(select(Project).where(Project.id == project_id))
+    if project is None or project.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=PROJECT_NOT_FOUND_ERROR)
+    return project
+
+
+def _get_environment_or_404(environment_id: str, organization_id: str, db: OrmSession) -> Environment:
+    environment = db.scalar(select(Environment).where(Environment.id == environment_id))
+    if environment is None or environment.organization_id != organization_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ENVIRONMENT_NOT_FOUND_ERROR)
+    return environment
+
+
+def _resolve_resource_container(
+    *,
+    organization_id: str,
+    container_type: str,
+    container_id: str,
+    db: OrmSession,
+) -> tuple[str, str, App | None, Project | None, Environment | None]:
+    normalized_container_type = container_type.strip().lower()
+    normalized_container_id = container_id.strip()
+
+    if normalized_container_type not in ALLOWED_RESOURCE_CONTAINER_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=RESOURCE_CONTAINER_MISMATCH_ERROR)
+
+    if normalized_container_type == "app":
+        app = _get_app_or_404(normalized_container_id, organization_id, db)
+        return normalized_container_type, app.id, app, None, None
+
+    if normalized_container_type == "project":
+        project = _get_project_or_404(normalized_container_id, organization_id, db)
+        app = _get_app_or_404(project.app_id, organization_id, db)
+        return normalized_container_type, project.id, app, project, None
+
+    environment = _get_environment_or_404(normalized_container_id, organization_id, db)
+    project = _get_project_or_404(environment.project_id, organization_id, db)
+    app = _get_app_or_404(project.app_id, organization_id, db)
+    return normalized_container_type, environment.id, app, project, environment
+
+
+def _validate_resource_scope(
+    *,
+    organization: Organization,
+    scope_type: str,
+    scope_id: str,
+    app: App | None,
+    project: Project | None,
+    environment: Environment | None,
+    db: OrmSession,
+) -> tuple[str, str]:
+    normalized_scope_type, normalized_scope_id = _validate_scope(organization, scope_type, scope_id, db)
+
+    if normalized_scope_type == "team":
+        return normalized_scope_type, normalized_scope_id
+
+    if environment is not None:
+        return normalized_scope_type, normalized_scope_id
+
+    if project is not None:
+        return normalized_scope_type, normalized_scope_id
+
+    if app is not None:
+        return normalized_scope_type, normalized_scope_id
+
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=RESOURCE_SCOPE_MISMATCH_ERROR)
 
 
 @router.get("/organization", response_model=OrganizationResponse)
@@ -480,7 +821,7 @@ def create_catalog_user(
     db.add(catalog_user)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         db.rollback()
         _raise_duplicate_catalog_user()
     db.refresh(catalog_user)
@@ -540,7 +881,7 @@ def create_team(
     db.add(team)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         db.rollback()
         _raise_duplicate_team()
     db.refresh(team)
@@ -587,7 +928,7 @@ def create_scoped_role(
     db.add(scoped_role)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         db.rollback()
         _raise_duplicate_scoped_role()
     db.refresh(scoped_role)
@@ -629,7 +970,7 @@ def create_team_membership(
     db.add(membership)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         db.rollback()
         _raise_duplicate_team_membership()
     db.refresh(membership)
@@ -671,8 +1012,198 @@ def create_direct_role_assignment(
     db.add(assignment)
     try:
         db.commit()
-    except IntegrityError as exc:
+    except IntegrityError:
         db.rollback()
         _raise_duplicate_direct_role_assignment()
     db.refresh(assignment)
     return DirectRoleAssignmentMutationResponse(assignment=_serialize_direct_role_assignment(assignment))
+
+
+@router.get("/apps", response_model=AppListResponse)
+def list_apps(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> AppListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(App)
+        .where(App.organization_id == organization.id)
+        .order_by(App.name.asc(), App.id.asc())
+    ).all()
+    return AppListResponse(items=[_serialize_app(item) for item in items])
+
+
+@router.post("/apps", response_model=AppMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_app(
+    payload: AppCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> AppMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    app = App(
+        id=f"app_{uuid4().hex}",
+        organization_id=organization.id,
+        name=_normalize_required_text(payload.name),
+        description=_normalize_optional_text(payload.description),
+    )
+    db.add(app)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _raise_duplicate_app()
+    db.refresh(app)
+    return AppMutationResponse(app=_serialize_app(app))
+
+
+@router.get("/projects", response_model=ProjectListResponse)
+def list_projects(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ProjectListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(Project)
+        .where(Project.organization_id == organization.id)
+        .order_by(Project.name.asc(), Project.id.asc())
+    ).all()
+    return ProjectListResponse(items=[_serialize_project(item) for item in items])
+
+
+@router.post("/projects", response_model=ProjectMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_project(
+    payload: ProjectCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ProjectMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    app = _get_app_or_404(payload.app_id.strip(), organization.id, db)
+    project = Project(
+        id=f"proj_{uuid4().hex}",
+        organization_id=organization.id,
+        app_id=app.id,
+        name=_normalize_required_text(payload.name),
+        description=_normalize_optional_text(payload.description),
+    )
+    db.add(project)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _raise_duplicate_project()
+    db.refresh(project)
+    return ProjectMutationResponse(project=_serialize_project(project))
+
+
+@router.get("/environments", response_model=EnvironmentListResponse)
+def list_environments(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> EnvironmentListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(Environment)
+        .where(Environment.organization_id == organization.id)
+        .order_by(Environment.name.asc(), Environment.id.asc())
+    ).all()
+    return EnvironmentListResponse(items=[_serialize_environment(item) for item in items])
+
+
+@router.post("/environments", response_model=EnvironmentMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_environment(
+    payload: EnvironmentCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> EnvironmentMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    project = _get_project_or_404(payload.project_id.strip(), organization.id, db)
+    environment = Environment(
+        id=f"env_{uuid4().hex}",
+        organization_id=organization.id,
+        project_id=project.id,
+        name=_normalize_required_text(payload.name),
+        description=_normalize_optional_text(payload.description),
+    )
+    db.add(environment)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _raise_duplicate_environment()
+    db.refresh(environment)
+    return EnvironmentMutationResponse(environment=_serialize_environment(environment))
+
+
+@router.get("/resources", response_model=ResourceListResponse)
+def list_resources(
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ResourceListResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    items = db.scalars(
+        select(Resource)
+        .where(Resource.organization_id == organization.id)
+        .order_by(Resource.resource_type.asc(), Resource.name.asc(), Resource.id.asc())
+    ).all()
+    return ResourceListResponse(items=[_serialize_resource(item) for item in items])
+
+
+@router.post("/resources", response_model=ResourceMutationResponse, status_code=status.HTTP_201_CREATED)
+def create_resource(
+    payload: ResourceCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> ResourceMutationResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    resource_type = payload.resource_type.strip().lower()
+    if resource_type not in ALLOWED_RESOURCE_TYPES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=RESOURCE_CONTAINER_MISMATCH_ERROR)
+
+    container_type, container_id, app, project, environment = _resolve_resource_container(
+        organization_id=organization.id,
+        container_type=payload.container_type,
+        container_id=payload.container_id,
+        db=db,
+    )
+    scope_type, scope_id = _validate_resource_scope(
+        organization=organization,
+        scope_type=payload.scope_type,
+        scope_id=payload.scope_id,
+        app=app,
+        project=project,
+        environment=environment,
+        db=db,
+    )
+    metadata = _normalize_metadata(payload.metadata)
+
+    resource = Resource(
+        id=f"res_{uuid4().hex}",
+        organization_id=organization.id,
+        app_id=app.id if app is not None else None,
+        project_id=project.id if project is not None else None,
+        environment_id=environment.id if environment is not None else None,
+        name=_normalize_required_text(payload.name),
+        resource_type=resource_type,
+        container_type=container_type,
+        container_id=container_id,
+        scope_type=scope_type,
+        scope_id=scope_id,
+        description=_normalize_optional_text(payload.description),
+        metadata_json=metadata,
+    )
+    db.add(resource)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _raise_duplicate_resource()
+    db.refresh(resource)
+    return ResourceMutationResponse(resource=_serialize_resource(resource))

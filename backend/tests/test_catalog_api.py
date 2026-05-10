@@ -1,12 +1,14 @@
-from datetime import UTC, datetime
-
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.base import (
+    App,
     AuditEvent,
     CatalogUser,
     DirectRoleAssignment,
+    Environment,
     Organization,
+    Project,
+    Resource,
     ScopedRole,
     Team,
     TeamMembership,
@@ -62,6 +64,42 @@ def test_catalog_endpoints_require_authentication(client):
     }
 
     response = client.get("/api/v1/catalog/assignments")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/apps")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/projects")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/environments")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
+    response = client.get("/api/v1/catalog/resources")
     assert response.status_code == 401
     assert response.json() == {
         "detail": {
@@ -688,5 +726,300 @@ def test_membership_and_assignment_failures_return_stable_machine_readable_codes
         "detail": {
             "code": "catalog_user_not_found",
             "message": "Catalog user was not found.",
+        }
+    }
+
+
+def test_app_project_environment_and_resource_happy_path(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    team = Team(
+        id="team_fixture",
+        organization_id=organization.id,
+        name="Security",
+        description="Handles review",
+    )
+    db_session.add_all([organization, team])
+    db_session.commit()
+
+    app_response = client.post(
+        "/api/v1/catalog/apps",
+        json={"name": " Customer Portal ", "description": " Primary frontend "},
+    )
+    assert app_response.status_code == 201
+    app = app_response.json()["app"]
+    assert app["id"].startswith("app_")
+    assert app["name"] == "Customer Portal"
+    assert app["organization_id"] == organization.id
+
+    project_response = client.post(
+        "/api/v1/catalog/projects",
+        json={"app_id": app["id"], "name": " Identity API ", "description": " Backend service "},
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()["project"]
+    assert project["id"].startswith("proj_")
+    assert project["app_id"] == app["id"]
+    assert project["name"] == "Identity API"
+
+    environment_response = client.post(
+        "/api/v1/catalog/environments",
+        json={"project_id": project["id"], "name": " Production ", "description": " Live env "},
+    )
+    assert environment_response.status_code == 201
+    environment = environment_response.json()["environment"]
+    assert environment["id"].startswith("env_")
+    assert environment["project_id"] == project["id"]
+    assert environment["name"] == "Production"
+
+    resource_response = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "team",
+            "scope_id": team.id,
+            "description": "Aurora cluster backing order writes",
+            "metadata": {"engine": "postgres", "tier": "production"},
+        },
+    )
+    assert resource_response.status_code == 201
+    resource = resource_response.json()["resource"]
+    assert resource["id"].startswith("res_")
+    assert resource["app_id"] == app["id"]
+    assert resource["project_id"] == project["id"]
+    assert resource["environment_id"] == environment["id"]
+    assert resource["resource_type"] == "database"
+    assert resource["container_type"] == "environment"
+    assert resource["scope_type"] == "team"
+    assert resource["metadata"] == {"engine": "postgres", "tier": "production"}
+
+    assert client.get("/api/v1/catalog/apps").json()["items"] == [app]
+    assert client.get("/api/v1/catalog/projects").json()["items"] == [project]
+    assert client.get("/api/v1/catalog/environments").json()["items"] == [environment]
+    assert client.get("/api/v1/catalog/resources").json()["items"] == [resource]
+
+    stored_app = db_session.query(App).filter_by(id=app["id"]).one()
+    stored_project = db_session.query(Project).filter_by(id=project["id"]).one()
+    stored_environment = db_session.query(Environment).filter_by(id=environment["id"]).one()
+    stored_resource = db_session.query(Resource).filter_by(id=resource["id"]).one()
+    assert stored_project.app_id == stored_app.id
+    assert stored_environment.project_id == stored_project.id
+    assert stored_resource.app_id == stored_app.id
+    assert stored_resource.project_id == stored_project.id
+    assert stored_resource.environment_id == stored_environment.id
+    assert stored_resource.metadata_json == {"engine": "postgres", "tier": "production"}
+    assert "password" not in str(stored_resource.metadata_json)
+
+
+def test_app_project_environment_and_resource_failures_are_machine_readable(client):
+    login_as_admin(client)
+    org = client.get("/api/v1/catalog/organization").json()
+
+    first_app = client.post(
+        "/api/v1/catalog/apps",
+        json={"name": "Portal", "description": "UI"},
+    )
+    assert first_app.status_code == 201
+    app = first_app.json()["app"]
+
+    duplicate_app = client.post(
+        "/api/v1/catalog/apps",
+        json={"name": "Portal", "description": "Duplicate"},
+    )
+    assert duplicate_app.status_code == 409
+    assert duplicate_app.json() == {
+        "detail": {
+            "code": "app_conflict",
+            "message": "App already exists.",
+        }
+    }
+
+    missing_project_parent = client.post(
+        "/api/v1/catalog/projects",
+        json={"app_id": "app_missing", "name": "Identity API", "description": "backend"},
+    )
+    assert missing_project_parent.status_code == 404
+    assert missing_project_parent.json() == {
+        "detail": {
+            "code": "app_not_found",
+            "message": "App was not found.",
+        }
+    }
+
+    first_project = client.post(
+        "/api/v1/catalog/projects",
+        json={"app_id": app["id"], "name": "Identity API", "description": "backend"},
+    )
+    assert first_project.status_code == 201
+    project = first_project.json()["project"]
+
+    duplicate_project = client.post(
+        "/api/v1/catalog/projects",
+        json={"app_id": app["id"], "name": "Identity API", "description": "duplicate"},
+    )
+    assert duplicate_project.status_code == 409
+    assert duplicate_project.json() == {
+        "detail": {
+            "code": "project_conflict",
+            "message": "Project already exists for this app.",
+        }
+    }
+
+    missing_environment_parent = client.post(
+        "/api/v1/catalog/environments",
+        json={"project_id": "proj_missing", "name": "prod", "description": "missing"},
+    )
+    assert missing_environment_parent.status_code == 404
+    assert missing_environment_parent.json() == {
+        "detail": {
+            "code": "project_not_found",
+            "message": "Project was not found.",
+        }
+    }
+
+    first_environment = client.post(
+        "/api/v1/catalog/environments",
+        json={"project_id": project["id"], "name": "prod", "description": "live"},
+    )
+    assert first_environment.status_code == 201
+    environment = first_environment.json()["environment"]
+
+    duplicate_environment = client.post(
+        "/api/v1/catalog/environments",
+        json={"project_id": project["id"], "name": "prod", "description": "duplicate"},
+    )
+    assert duplicate_environment.status_code == 409
+    assert duplicate_environment.json() == {
+        "detail": {
+            "code": "environment_conflict",
+            "message": "Environment already exists for this project.",
+        }
+    }
+
+    invalid_resource_parent = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": "env_missing",
+            "scope_type": "organization",
+            "scope_id": org["id"],
+            "description": "missing env",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert invalid_resource_parent.status_code == 404
+    assert invalid_resource_parent.json() == {
+        "detail": {
+            "code": "environment_not_found",
+            "message": "Environment was not found.",
+        }
+    }
+
+    invalid_resource_scope = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "organization",
+            "scope_id": "org_missing",
+            "description": "bad scope",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert invalid_resource_scope.status_code == 422
+    assert invalid_resource_scope.json() == {
+        "detail": {
+            "code": "scoped_role_scope_mismatch",
+            "message": "Scoped role scope_type and scope_id do not match a valid catalog container.",
+        }
+    }
+
+    invalid_resource_type = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "ssh_key",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "organization",
+            "scope_id": org["id"],
+            "description": "bad type",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert invalid_resource_type.status_code == 422
+    assert invalid_resource_type.json() == {
+        "detail": {
+            "code": "resource_container_mismatch",
+            "message": "Resource container_type and container_id do not match a valid catalog container.",
+        }
+    }
+
+    invalid_secret_payload = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "organization",
+            "scope_id": org["id"],
+            "description": "bad metadata",
+            "metadata": {"password": "super-secret"},
+        },
+    )
+    assert invalid_secret_payload.status_code == 422
+    assert invalid_secret_payload.json() == {
+        "detail": {
+            "code": "resource_secret_payload_forbidden",
+            "message": "Resource metadata must stay descriptive and cannot store secret payloads.",
+        }
+    }
+
+    first_resource = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "organization",
+            "scope_id": org["id"],
+            "description": "primary datastore",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert first_resource.status_code == 201
+
+    duplicate_resource = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "organization",
+            "scope_id": org["id"],
+            "description": "duplicate",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert duplicate_resource.status_code == 409
+    assert duplicate_resource.json() == {
+        "detail": {
+            "code": "resource_conflict",
+            "message": "Resource already exists for this container and scope.",
         }
     }
