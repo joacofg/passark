@@ -9,9 +9,9 @@ required_files=(
   ".env.example"
   "compose.yaml"
   "Makefile"
-  "docs/local-development.md"
-  "backend/app/api/routes/auth.py"
-  "backend/app/db/session.py"
+  "frontend/lib/catalog.ts"
+  "frontend/app/auth-shell.tsx"
+  "backend/app/api/routes/catalog.py"
 )
 
 for path in "${required_files[@]}"; do
@@ -26,19 +26,59 @@ if ! grep -q "verify-s03" README.md; then
   exit 1
 fi
 
-if ! grep -q "vault-access-probe" docs/local-development.md; then
-  echo "docs/local-development.md must document the audited sensitive route proof." >&2
-  exit 1
-fi
-
 TEMP_ENV_CREATED=0
 if [[ ! -f .env ]]; then
   cp .env.example .env
   TEMP_ENV_CREATED=1
 fi
 
+COOKIE_JAR=""
+LOGIN_HEADERS=""
+LOGIN_BODY=""
+USERS_BODY=""
+APPS_BODY=""
+PROJECTS_BODY=""
+ENVIRONMENTS_BODY=""
+RESOURCES_BODY=""
+APP_CREATE_HEADERS=""
+APP_CREATE_BODY=""
+PROJECT_CREATE_HEADERS=""
+PROJECT_CREATE_BODY=""
+ENVIRONMENT_CREATE_HEADERS=""
+ENVIRONMENT_CREATE_BODY=""
+RESOURCE_CREATE_HEADERS=""
+RESOURCE_CREATE_BODY=""
+MISSING_PROJECT_HEADERS=""
+MISSING_PROJECT_BODY=""
+SCOPE_MISMATCH_HEADERS=""
+SCOPE_MISMATCH_BODY=""
+SECRET_FORBIDDEN_HEADERS=""
+SECRET_FORBIDDEN_BODY=""
+
 cleanup() {
-  rm -f "${COOKIE_JAR:-}" "${LOGIN_HEADERS:-}" "${LOGIN_BODY:-}" "${PROBE_HEADERS:-}" "${PROBE_BODY:-}" "${ANON_HEADERS:-}" "${ANON_BODY:-}" "${INVALID_HEADERS:-}" "${INVALID_BODY:-}" "${DB_OUTPUT:-}"
+  rm -f \
+    "$COOKIE_JAR" \
+    "$LOGIN_HEADERS" \
+    "$LOGIN_BODY" \
+    "$USERS_BODY" \
+    "$APPS_BODY" \
+    "$PROJECTS_BODY" \
+    "$ENVIRONMENTS_BODY" \
+    "$RESOURCES_BODY" \
+    "$APP_CREATE_HEADERS" \
+    "$APP_CREATE_BODY" \
+    "$PROJECT_CREATE_HEADERS" \
+    "$PROJECT_CREATE_BODY" \
+    "$ENVIRONMENT_CREATE_HEADERS" \
+    "$ENVIRONMENT_CREATE_BODY" \
+    "$RESOURCE_CREATE_HEADERS" \
+    "$RESOURCE_CREATE_BODY" \
+    "$MISSING_PROJECT_HEADERS" \
+    "$MISSING_PROJECT_BODY" \
+    "$SCOPE_MISMATCH_HEADERS" \
+    "$SCOPE_MISMATCH_BODY" \
+    "$SECRET_FORBIDDEN_HEADERS" \
+    "$SECRET_FORBIDDEN_BODY"
   if [[ "$TEMP_ENV_CREATED" -eq 1 ]]; then
     rm -f .env
   fi
@@ -56,6 +96,8 @@ print_infra_failure() {
 print_service_logs() {
   echo "Recent backend logs:" >&2
   docker compose logs --tail=50 backend >&2 || true
+  echo "Recent frontend logs:" >&2
+  docker compose logs --tail=50 frontend >&2 || true
   echo "Recent postgres logs:" >&2
   docker compose logs --tail=50 postgres >&2 || true
 }
@@ -66,17 +108,17 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 if ! docker info >/dev/null 2>&1; then
-  echo "docker daemon unavailable; start Docker before running compose-backed verification." >&2
+  echo "docker daemon unavailable; start Docker before running compose-backed verification. This is infrastructure gating, not a product failure." >&2
   exit 1
 fi
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "curl is required for security verification." >&2
+  echo "curl is required for catalog verification." >&2
   exit 1
 fi
 
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required for security verification." >&2
+  echo "python3 is required for catalog verification." >&2
   exit 1
 fi
 
@@ -125,38 +167,30 @@ backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1"
 COOKIE_JAR="$(mktemp)"
 LOGIN_HEADERS="$(mktemp)"
 LOGIN_BODY="$(mktemp)"
-PROBE_HEADERS="$(mktemp)"
-PROBE_BODY="$(mktemp)"
-ANON_HEADERS="$(mktemp)"
-ANON_BODY="$(mktemp)"
-INVALID_HEADERS="$(mktemp)"
-INVALID_BODY="$(mktemp)"
-DB_OUTPUT="$(mktemp)"
+USERS_BODY="$(mktemp)"
+APPS_BODY="$(mktemp)"
+PROJECTS_BODY="$(mktemp)"
+ENVIRONMENTS_BODY="$(mktemp)"
+RESOURCES_BODY="$(mktemp)"
+APP_CREATE_HEADERS="$(mktemp)"
+APP_CREATE_BODY="$(mktemp)"
+PROJECT_CREATE_HEADERS="$(mktemp)"
+PROJECT_CREATE_BODY="$(mktemp)"
+ENVIRONMENT_CREATE_HEADERS="$(mktemp)"
+ENVIRONMENT_CREATE_BODY="$(mktemp)"
+RESOURCE_CREATE_HEADERS="$(mktemp)"
+RESOURCE_CREATE_BODY="$(mktemp)"
+MISSING_PROJECT_HEADERS="$(mktemp)"
+MISSING_PROJECT_BODY="$(mktemp)"
+SCOPE_MISMATCH_HEADERS="$(mktemp)"
+SCOPE_MISMATCH_BODY="$(mktemp)"
+SECRET_FORBIDDEN_HEADERS="$(mktemp)"
+SECRET_FORBIDDEN_BODY="$(mktemp)"
 CORRELATION_ID="verify-s03-$(date +%s)"
-REQUEST_ID="req-${CORRELATION_ID}"
-
-echo "==> Probing backend health endpoint: ${backend_url}/health"
-backend_payload="$(curl --fail --silent --show-error "${backend_url}/health")"
-printf '%s\n' "$backend_payload"
-printf '%s' "$backend_payload" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["status"] == "ok"; assert payload["service"] == "passark-backend"'
-
-echo "==> Verifying anonymous sensitive access is rejected"
-curl --silent --show-error \
-  --output "$ANON_BODY" \
-  --dump-header "$ANON_HEADERS" \
-  --request POST \
-  --header "x-request-id: ${REQUEST_ID}-anon" \
-  --header "x-correlation-id: ${CORRELATION_ID}-anon" \
-  "${backend_url}/protected/vault-access-probe"
-anon_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$ANON_HEADERS")"
-if [[ "$anon_status" != "401" ]]; then
-  echo "Expected anonymous sensitive access to return 401; got ${anon_status:-unknown}." >&2
-  cat "$ANON_HEADERS" >&2
-  cat "$ANON_BODY" >&2
-  print_service_logs
-  exit 1
-fi
-printf '%s' "$(cat "$ANON_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "auth_unauthenticated"'
+APP_NAME="Billing ${CORRELATION_ID}"
+PROJECT_NAME="Payments ${CORRELATION_ID}"
+ENVIRONMENT_NAME="Staging ${CORRELATION_ID}"
+RESOURCE_NAME="Queue ${CORRELATION_ID}"
 
 echo "==> Logging in with bootstrap operator"
 login_payload="$(python3 - <<'PY'
@@ -183,120 +217,275 @@ if [[ "$login_status" != "200" ]]; then
   print_service_logs
   exit 1
 fi
-printf '%s' "$(cat "$LOGIN_BODY")" | python3 -c 'import json,os,sys; payload=json.load(sys.stdin); assert payload["user"]["email"] == os.environ.get("AUTH_BOOTSTRAP_ADMIN_EMAIL", "admin@passark.local")'
 
-echo "==> Verifying audited sensitive access succeeds"
+echo "==> Listing catalog users for downstream scope checks"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/users" > "$USERS_BODY"
+CATALOG_USER_ID="$(python3 - "$USERS_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+items = payload.get("items", [])
+if not items:
+    raise SystemExit("No catalog users exist; create one via the operator workspace before running verify-s03.")
+print(items[0]["id"])
+PY
+)"
+
+echo "==> Creating an application"
+app_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": ${APP_NAME@Q},
+    "description": "Verification application created by verify-s03",
+}))
+PY
+)"
 curl --silent --show-error \
   --cookie "$COOKIE_JAR" \
-  --output "$PROBE_BODY" \
-  --dump-header "$PROBE_HEADERS" \
-  --request POST \
-  --header "x-request-id: ${REQUEST_ID}" \
-  --header "x-correlation-id: ${CORRELATION_ID}" \
-  --header 'user-agent: verify-s03-script' \
-  --header 'x-forwarded-for: 203.0.113.10' \
-  "${backend_url}/protected/vault-access-probe"
-probe_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$PROBE_HEADERS")"
-if [[ "$probe_status" != "200" ]]; then
-  echo "Expected audited sensitive access to return 200; got ${probe_status:-unknown}." >&2
-  cat "$PROBE_HEADERS" >&2
-  cat "$PROBE_BODY" >&2
+  --output "$APP_CREATE_BODY" \
+  --dump-header "$APP_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$app_payload" \
+  "${backend_url}/catalog/apps"
+app_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$APP_CREATE_HEADERS")"
+if [[ "$app_status" != "201" ]]; then
+  echo "Expected application create to succeed; got ${app_status:-unknown}." >&2
+  cat "$APP_CREATE_HEADERS" >&2
+  cat "$APP_CREATE_BODY" >&2
   print_service_logs
   exit 1
 fi
-printf '%s' "$(cat "$PROBE_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["operation"] == "vault_access_probe"; assert payload["status"] == "allowed"; assert payload["actor_id"] > 0; assert payload["audit_event_id"] > 0'
+APP_ID="$(python3 - "$APP_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["app"]["id"])
+PY
+)"
 
-echo "==> Invalidating the authenticated session to verify fail-closed denial"
-curl --silent --show-error --cookie "$COOKIE_JAR" --request POST --output /dev/null "${backend_url}/auth/logout"
-
+echo "==> Creating a project under the new application"
+project_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "app_id": ${APP_ID@Q},
+    "name": ${PROJECT_NAME@Q},
+    "description": "Verification project created by verify-s03",
+}))
+PY
+)"
 curl --silent --show-error \
   --cookie "$COOKIE_JAR" \
-  --output "$INVALID_BODY" \
-  --dump-header "$INVALID_HEADERS" \
-  --request POST \
-  --header "x-request-id: ${REQUEST_ID}-invalidated" \
-  --header "x-correlation-id: ${CORRELATION_ID}-invalidated" \
-  "${backend_url}/protected/vault-access-probe"
-invalid_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$INVALID_HEADERS")"
-if [[ "$invalid_status" != "401" ]]; then
-  echo "Expected invalidated-session sensitive access to return 401; got ${invalid_status:-unknown}." >&2
-  cat "$INVALID_HEADERS" >&2
-  cat "$INVALID_BODY" >&2
+  --output "$PROJECT_CREATE_BODY" \
+  --dump-header "$PROJECT_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$project_payload" \
+  "${backend_url}/catalog/projects"
+project_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$PROJECT_CREATE_HEADERS")"
+if [[ "$project_status" != "201" ]]; then
+  echo "Expected project create to succeed; got ${project_status:-unknown}." >&2
+  cat "$PROJECT_CREATE_HEADERS" >&2
+  cat "$PROJECT_CREATE_BODY" >&2
   print_service_logs
   exit 1
 fi
-printf '%s' "$(cat "$INVALID_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "auth_unauthenticated"'
+PROJECT_ID="$(python3 - "$PROJECT_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["project"]["id"])
+PY
+)"
 
-echo "==> Inspecting persisted audit evidence in PostgreSQL"
-if ! docker compose exec -T postgres \
-  psql -U "${POSTGRES_USER:-passark}" -d "${POSTGRES_DB:-passark}" \
-  -At -F '|' \
-  -c "SELECT operation, outcome, reason_code, COALESCE(actor_user_id::text,''), COALESCE(correlation_id,''), COALESCE(request_id,''), metadata_json::text FROM audit_events WHERE correlation_id IN ('${CORRELATION_ID}', '${CORRELATION_ID}-invalidated') ORDER BY id;" >"$DB_OUTPUT"; then
-  echo "Failed to inspect persisted audit rows." >&2
+echo "==> Creating an environment under the new project"
+environment_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "project_id": ${PROJECT_ID@Q},
+    "name": ${ENVIRONMENT_NAME@Q},
+    "description": "Verification environment created by verify-s03",
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$ENVIRONMENT_CREATE_BODY" \
+  --dump-header "$ENVIRONMENT_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$environment_payload" \
+  "${backend_url}/catalog/environments"
+environment_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$ENVIRONMENT_CREATE_HEADERS")"
+if [[ "$environment_status" != "201" ]]; then
+  echo "Expected environment create to succeed; got ${environment_status:-unknown}." >&2
+  cat "$ENVIRONMENT_CREATE_HEADERS" >&2
+  cat "$ENVIRONMENT_CREATE_BODY" >&2
   print_service_logs
   exit 1
 fi
+ENVIRONMENT_ID="$(python3 - "$ENVIRONMENT_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["environment"]["id"])
+PY
+)"
 
-if [[ ! -s "$DB_OUTPUT" ]]; then
-  echo "Expected persisted audit rows for correlation ${CORRELATION_ID}, but found zero rows." >&2
+echo "==> Creating a typed resource with descriptive metadata only"
+resource_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": ${RESOURCE_NAME@Q},
+    "resource_type": "queue",
+    "container_type": "environment",
+    "container_id": ${ENVIRONMENT_ID@Q},
+    "scope_type": "organization",
+    "scope_id": "org_123",
+    "description": "Verification resource created by verify-s03",
+    "metadata": {
+        "owner": "platform",
+        "rotation": "manual"
+    }
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$RESOURCE_CREATE_BODY" \
+  --dump-header "$RESOURCE_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$resource_payload" \
+  "${backend_url}/catalog/resources"
+resource_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$RESOURCE_CREATE_HEADERS")"
+if [[ "$resource_status" != "201" ]]; then
+  echo "Expected resource create to succeed; got ${resource_status:-unknown}." >&2
+  cat "$RESOURCE_CREATE_HEADERS" >&2
+  cat "$RESOURCE_CREATE_BODY" >&2
   print_service_logs
   exit 1
 fi
+RESOURCE_ID="$(python3 - "$RESOURCE_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["resource"]["id"])
+PY
+)"
 
-printf '%s\n' "Persisted audit rows:"
-cat "$DB_OUTPUT"
+echo "==> Reading the hierarchy back from list endpoints"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/apps" > "$APPS_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/projects" > "$PROJECTS_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/environments" > "$ENVIRONMENTS_BODY"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/resources" > "$RESOURCES_BODY"
 
-python3 - "$DB_OUTPUT" "$CORRELATION_ID" <<'PY'
+python3 - "$APPS_BODY" "$PROJECTS_BODY" "$ENVIRONMENTS_BODY" "$RESOURCES_BODY" "$APP_ID" "$PROJECT_ID" "$ENVIRONMENT_ID" "$RESOURCE_ID" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-rows = []
-for raw in Path(sys.argv[1]).read_text().splitlines():
-    if not raw.strip():
-        continue
-    parts = raw.split("|", 6)
-    if len(parts) != 7:
-        raise SystemExit(f"Unexpected audit row shape: {raw}")
-    operation, outcome, reason_code, actor_user_id, correlation_id, request_id, metadata_text = parts
-    try:
-        metadata = json.loads(metadata_text)
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"Malformed audit metadata JSON: {metadata_text}") from exc
-    rows.append({
-        "operation": operation,
-        "outcome": outcome,
-        "reason_code": reason_code,
-        "actor_user_id": actor_user_id,
-        "correlation_id": correlation_id,
-        "request_id": request_id,
-        "metadata": metadata,
-    })
+apps = json.loads(Path(sys.argv[1]).read_text())["items"]
+projects = json.loads(Path(sys.argv[2]).read_text())["items"]
+environments = json.loads(Path(sys.argv[3]).read_text())["items"]
+resources = json.loads(Path(sys.argv[4]).read_text())["items"]
+app_id, project_id, environment_id, resource_id = sys.argv[5:9]
 
-success_rows = [row for row in rows if row["correlation_id"] == sys.argv[2]]
-denied_rows = [row for row in rows if row["correlation_id"] == f"{sys.argv[2]}-invalidated"]
-
-if len(success_rows) != 1:
-    raise SystemExit(f"Expected exactly one success audit row, found {len(success_rows)}")
-if len(denied_rows) != 1:
-    raise SystemExit(f"Expected exactly one denied audit row for invalidated session, found {len(denied_rows)}")
-
-success = success_rows[0]
-denied = denied_rows[0]
-
-assert success["operation"] == "vault_access_probe", success
-assert success["outcome"] == "sensitive_operation_allowed", success
-assert success["reason_code"] == "sensitive_operation_allowed", success
-assert success["actor_user_id"], success
-assert success["request_id"] == f"req-{sys.argv[2]}", success
-assert success["metadata"] == {"user_email": "admin@passark.local"}, success
-
-assert denied["operation"] == "vault_access_probe", denied
-assert denied["outcome"] == "sensitive_operation_denied", denied
-assert denied["reason_code"] == "auth_unauthenticated", denied
-assert denied["actor_user_id"], denied
-assert denied["request_id"] == f"req-{sys.argv[2]}-invalidated", denied
-assert denied["metadata"] == {"cause": "session_invalidated"}, denied
+assert any(item["id"] == app_id for item in apps), apps
+assert any(item["id"] == project_id and item["app_id"] == app_id for item in projects), projects
+assert any(item["id"] == environment_id and item["project_id"] == project_id for item in environments), environments
+assert any(
+    item["id"] == resource_id
+    and item["environment_id"] == environment_id
+    and item["project_id"] == project_id
+    and item["app_id"] == app_id
+    and item["metadata"] == {"owner": "platform", "rotation": "manual"}
+    for item in resources
+), resources
 PY
 
-echo "S03 security verification passed: audited success, anonymous denial, invalidated-session fail-closed denial, and persisted audit evidence are all present."
+echo "==> Verifying missing-parent failures stay machine-readable"
+missing_project_payload='{"project_id":"proj_missing","name":"Broken","description":"Should fail"}'
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$MISSING_PROJECT_BODY" \
+  --dump-header "$MISSING_PROJECT_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$missing_project_payload" \
+  "${backend_url}/catalog/environments"
+missing_project_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$MISSING_PROJECT_HEADERS")"
+if [[ "$missing_project_status" != "404" ]]; then
+  echo "Expected missing-parent environment create to return 404; got ${missing_project_status:-unknown}." >&2
+  cat "$MISSING_PROJECT_HEADERS" >&2
+  cat "$MISSING_PROJECT_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+printf '%s' "$(cat "$MISSING_PROJECT_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "project_not_found"'
+
+echo "==> Verifying scope-mismatch failures stay machine-readable"
+scope_mismatch_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": "Scope mismatch ${CORRELATION_ID}",
+    "resource_type": "queue",
+    "container_type": "environment",
+    "container_id": ${ENVIRONMENT_ID@Q},
+    "scope_type": "team",
+    "scope_id": ${CATALOG_USER_ID@Q},
+    "description": "Should fail",
+    "metadata": {"owner": "platform"}
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$SCOPE_MISMATCH_BODY" \
+  --dump-header "$SCOPE_MISMATCH_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$scope_mismatch_payload" \
+  "${backend_url}/catalog/resources"
+scope_mismatch_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$SCOPE_MISMATCH_HEADERS")"
+if [[ "$scope_mismatch_status" != "422" ]]; then
+  echo "Expected scope-mismatch resource create to return 422; got ${scope_mismatch_status:-unknown}." >&2
+  cat "$SCOPE_MISMATCH_HEADERS" >&2
+  cat "$SCOPE_MISMATCH_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+printf '%s' "$(cat "$SCOPE_MISMATCH_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "resource_scope_mismatch"'
+
+echo "==> Verifying secret-payload rejection stays machine-readable"
+secret_forbidden_payload="$(python3 - <<PY
+import json
+print(json.dumps({
+    "name": "Forbidden secret ${CORRELATION_ID}",
+    "resource_type": "queue",
+    "container_type": "environment",
+    "container_id": ${ENVIRONMENT_ID@Q},
+    "scope_type": "organization",
+    "scope_id": "org_123",
+    "description": "Should fail",
+    "metadata": {"password": "super-secret"}
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$SECRET_FORBIDDEN_BODY" \
+  --dump-header "$SECRET_FORBIDDEN_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$secret_forbidden_payload" \
+  "${backend_url}/catalog/resources"
+secret_forbidden_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$SECRET_FORBIDDEN_HEADERS")"
+if [[ "$secret_forbidden_status" != "422" ]]; then
+  echo "Expected secret-payload resource create to return 422; got ${secret_forbidden_status:-unknown}." >&2
+  cat "$SECRET_FORBIDDEN_HEADERS" >&2
+  cat "$SECRET_FORBIDDEN_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+printf '%s' "$(cat "$SECRET_FORBIDDEN_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "resource_secret_payload_forbidden"'
+
+echo "S03 hierarchy verification passed: app, project, environment, and typed resource creation/readback succeeded, and missing-parent/scope-mismatch/secret-payload failures stayed machine-readable through the protected API seam."

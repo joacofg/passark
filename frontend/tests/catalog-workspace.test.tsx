@@ -40,14 +40,22 @@ vi.mock("../lib/catalog", async () => {
     createScopedRole: vi.fn(),
     createMembership: vi.fn(),
     createAssignment: vi.fn(),
+    createApp: vi.fn(),
+    createProject: vi.fn(),
+    createEnvironment: vi.fn(),
+    createResource: vi.fn(),
   };
 });
 
 const { readProtectedWhoAmI } = await import("../lib/auth");
 const {
+  createApp,
   createAssignment,
   createCatalogUser,
+  createEnvironment,
   createMembership,
+  createProject,
+  createResource,
   createScopedRole,
   createTeam,
   readCatalogWorkspace,
@@ -64,6 +72,10 @@ const createTeamMock = vi.mocked(createTeam);
 const createScopedRoleMock = vi.mocked(createScopedRole);
 const createMembershipMock = vi.mocked(createMembership);
 const createAssignmentMock = vi.mocked(createAssignment);
+const createAppMock = vi.mocked(createApp);
+const createProjectMock = vi.mocked(createProject);
+const createEnvironmentMock = vi.mocked(createEnvironment);
+const createResourceMock = vi.mocked(createResource);
 
 const baseWorkspace = {
   organization: {
@@ -124,6 +136,60 @@ const baseWorkspace = {
       created_at: "2024-01-01T00:00:00Z",
     },
   ],
+  apps: [
+    {
+      id: "app_console",
+      organization_id: "org_123",
+      name: "Operator Console",
+      description: "Primary operator interface",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  projects: [
+    {
+      id: "proj_identity",
+      organization_id: "org_123",
+      app_id: "app_console",
+      name: "Identity Graph",
+      description: "Catalog graph project",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  environments: [
+    {
+      id: "env_prod",
+      organization_id: "org_123",
+      project_id: "proj_identity",
+      name: "Production",
+      description: "Primary production environment",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  resources: [
+    {
+      id: "res_pg",
+      organization_id: "org_123",
+      app_id: "app_console",
+      project_id: "proj_identity",
+      environment_id: "env_prod",
+      name: "Primary Postgres",
+      resource_type: "database" as const,
+      container_type: "environment" as const,
+      container_id: "env_prod",
+      scope_type: "team" as const,
+      scope_id: "team_platform",
+      description: "Stores catalog state",
+      metadata: {
+        owner: "platform",
+        rotation: "manual",
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
 };
 
 function queueAuthenticatedWorkspace(
@@ -150,6 +216,10 @@ describe("catalog workspace", () => {
     createScopedRoleMock.mockReset();
     createMembershipMock.mockReset();
     createAssignmentMock.mockReset();
+    createAppMock.mockReset();
+    createProjectMock.mockReset();
+    createEnvironmentMock.mockReset();
+    createResourceMock.mockReset();
   });
 
   it("shows the loading state before catalog data resolves", async () => {
@@ -166,7 +236,7 @@ describe("catalog workspace", () => {
     expect(await screen.findByText(/loading catalog workspace/i)).toBeInTheDocument();
   });
 
-  it("shows empty-state callouts when the relationship catalog is empty", async () => {
+  it("shows empty-state callouts when the hierarchy catalog is empty", async () => {
     queueAuthenticatedWorkspace({
       ...baseWorkspace,
       users: [],
@@ -174,6 +244,10 @@ describe("catalog workspace", () => {
       scoped_roles: [],
       memberships: [],
       assignments: [],
+      apps: [],
+      projects: [],
+      environments: [],
+      resources: [],
     });
 
     render(<OperatorPage />);
@@ -183,6 +257,10 @@ describe("catalog workspace", () => {
     expect(screen.getByText(/no scoped roles yet/i)).toBeInTheDocument();
     expect(screen.getByText(/no team memberships yet/i)).toBeInTheDocument();
     expect(screen.getByText(/no direct role assignments yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no applications yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no environments yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no resources yet/i)).toBeInTheDocument();
   });
 
   it("creates a catalog user and refreshes the live workspace", async () => {
@@ -314,252 +392,312 @@ describe("catalog workspace", () => {
     expect(await screen.findByText(/principal analyst · inactive/i)).toBeInTheDocument();
   });
 
-  it("creates teams, roles, memberships, and assignments through the live workspace", async () => {
+  it("creates apps, projects, environments, and typed resources through the live workspace", async () => {
     queueAuthenticatedWorkspace({
       ...baseWorkspace,
-      teams: [],
-      scoped_roles: [],
-      memberships: [],
-      assignments: [],
+      apps: [],
+      projects: [],
+      environments: [],
+      resources: [],
     });
-    createTeamMock.mockResolvedValueOnce({
-      team: {
-        id: "team_security",
+    createAppMock.mockResolvedValueOnce({
+      app: {
+        id: "app_billing",
         organization_id: "org_123",
-        name: "Security",
-        description: "Handles review",
+        name: "Billing",
+        description: "Customer billing",
         created_at: "2024-01-02T00:00:00Z",
         updated_at: "2024-01-02T00:00:00Z",
       },
     });
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
-      teams: [
+      apps: [
         {
-          id: "team_security",
+          id: "app_billing",
           organization_id: "org_123",
-          name: "Security",
-          description: "Handles review",
+          name: "Billing",
+          description: "Customer billing",
           created_at: "2024-01-02T00:00:00Z",
           updated_at: "2024-01-02T00:00:00Z",
         },
       ],
-      scoped_roles: [],
-      memberships: [],
-      assignments: [],
+      projects: [],
+      environments: [],
+      resources: [],
     });
-    createScopedRoleMock.mockResolvedValueOnce({
-      scoped_role: {
-        id: "role_security_admin",
+    createProjectMock.mockResolvedValueOnce({
+      project: {
+        id: "proj_payments",
         organization_id: "org_123",
-        name: "Security Admin",
-        description: "Owns security approvals",
+        app_id: "app_billing",
+        name: "Payments Core",
+        description: "Core payment flows",
+        created_at: "2024-01-02T00:00:00Z",
+        updated_at: "2024-01-02T00:00:00Z",
+      },
+    });
+    readCatalogWorkspaceMock.mockResolvedValueOnce({
+      ...baseWorkspace,
+      apps: [
+        {
+          id: "app_billing",
+          organization_id: "org_123",
+          name: "Billing",
+          description: "Customer billing",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      projects: [
+        {
+          id: "proj_payments",
+          organization_id: "org_123",
+          app_id: "app_billing",
+          name: "Payments Core",
+          description: "Core payment flows",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      environments: [],
+      resources: [],
+    });
+    createEnvironmentMock.mockResolvedValueOnce({
+      environment: {
+        id: "env_staging",
+        organization_id: "org_123",
+        project_id: "proj_payments",
+        name: "Staging",
+        description: "Pre-production validation",
+        created_at: "2024-01-02T00:00:00Z",
+        updated_at: "2024-01-02T00:00:00Z",
+      },
+    });
+    readCatalogWorkspaceMock.mockResolvedValueOnce({
+      ...baseWorkspace,
+      apps: [
+        {
+          id: "app_billing",
+          organization_id: "org_123",
+          name: "Billing",
+          description: "Customer billing",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      projects: [
+        {
+          id: "proj_payments",
+          organization_id: "org_123",
+          app_id: "app_billing",
+          name: "Payments Core",
+          description: "Core payment flows",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      environments: [
+        {
+          id: "env_staging",
+          organization_id: "org_123",
+          project_id: "proj_payments",
+          name: "Staging",
+          description: "Pre-production validation",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      resources: [],
+    });
+    createResourceMock.mockResolvedValueOnce({
+      resource: {
+        id: "res_queue",
+        organization_id: "org_123",
+        app_id: "app_billing",
+        project_id: "proj_payments",
+        environment_id: "env_staging",
+        name: "Payments Queue",
+        resource_type: "queue",
+        container_type: "environment",
+        container_id: "env_staging",
         scope_type: "team",
-        scope_id: "team_security",
+        scope_id: "team_platform",
+        description: "Async payment processing",
+        metadata: {
+          owner: "platform",
+          rotation: "manual",
+        },
         created_at: "2024-01-02T00:00:00Z",
         updated_at: "2024-01-02T00:00:00Z",
       },
     });
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
-      teams: [
+      apps: [
         {
-          id: "team_security",
+          id: "app_billing",
           organization_id: "org_123",
-          name: "Security",
-          description: "Handles review",
+          name: "Billing",
+          description: "Customer billing",
           created_at: "2024-01-02T00:00:00Z",
           updated_at: "2024-01-02T00:00:00Z",
         },
       ],
-      scoped_roles: [
+      projects: [
         {
-          id: "role_security_admin",
+          id: "proj_payments",
           organization_id: "org_123",
-          name: "Security Admin",
-          description: "Owns security approvals",
+          app_id: "app_billing",
+          name: "Payments Core",
+          description: "Core payment flows",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      environments: [
+        {
+          id: "env_staging",
+          organization_id: "org_123",
+          project_id: "proj_payments",
+          name: "Staging",
+          description: "Pre-production validation",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      resources: [
+        {
+          id: "res_queue",
+          organization_id: "org_123",
+          app_id: "app_billing",
+          project_id: "proj_payments",
+          environment_id: "env_staging",
+          name: "Payments Queue",
+          resource_type: "queue",
+          container_type: "environment",
+          container_id: "env_staging",
           scope_type: "team",
-          scope_id: "team_security",
+          scope_id: "team_platform",
+          description: "Async payment processing",
+          metadata: {
+            owner: "platform",
+            rotation: "manual",
+          },
           created_at: "2024-01-02T00:00:00Z",
           updated_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      memberships: [],
-      assignments: [],
-    });
-    createMembershipMock.mockResolvedValueOnce({
-      membership: {
-        id: "tm_security",
-        team_id: "team_security",
-        catalog_user_id: "cu_ada",
-        created_at: "2024-01-02T00:00:00Z",
-      },
-    });
-    readCatalogWorkspaceMock.mockResolvedValueOnce({
-      ...baseWorkspace,
-      teams: [
-        {
-          id: "team_security",
-          organization_id: "org_123",
-          name: "Security",
-          description: "Handles review",
-          created_at: "2024-01-02T00:00:00Z",
-          updated_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      scoped_roles: [
-        {
-          id: "role_security_admin",
-          organization_id: "org_123",
-          name: "Security Admin",
-          description: "Owns security approvals",
-          scope_type: "team",
-          scope_id: "team_security",
-          created_at: "2024-01-02T00:00:00Z",
-          updated_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      memberships: [
-        {
-          id: "tm_security",
-          team_id: "team_security",
-          catalog_user_id: "cu_ada",
-          created_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      assignments: [],
-    });
-    createAssignmentMock.mockResolvedValueOnce({
-      assignment: {
-        id: "dra_security",
-        scoped_role_id: "role_security_admin",
-        catalog_user_id: "cu_ada",
-        created_at: "2024-01-02T00:00:00Z",
-      },
-    });
-    readCatalogWorkspaceMock.mockResolvedValueOnce({
-      ...baseWorkspace,
-      teams: [
-        {
-          id: "team_security",
-          organization_id: "org_123",
-          name: "Security",
-          description: "Handles review",
-          created_at: "2024-01-02T00:00:00Z",
-          updated_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      scoped_roles: [
-        {
-          id: "role_security_admin",
-          organization_id: "org_123",
-          name: "Security Admin",
-          description: "Owns security approvals",
-          scope_type: "team",
-          scope_id: "team_security",
-          created_at: "2024-01-02T00:00:00Z",
-          updated_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      memberships: [
-        {
-          id: "tm_security",
-          team_id: "team_security",
-          catalog_user_id: "cu_ada",
-          created_at: "2024-01-02T00:00:00Z",
-        },
-      ],
-      assignments: [
-        {
-          id: "dra_security",
-          scoped_role_id: "role_security_admin",
-          catalog_user_id: "cu_ada",
-          created_at: "2024-01-02T00:00:00Z",
         },
       ],
     });
 
     render(<OperatorPage />);
 
-    expect(await screen.findByText(/no teams yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no applications yet/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Team name"), {
-      target: { value: "Security" },
+    fireEvent.change(screen.getByLabelText("Application name"), {
+      target: { value: "Billing" },
     });
-    fireEvent.change(screen.getByLabelText("Team description"), {
-      target: { value: "Handles review" },
+    fireEvent.change(screen.getByLabelText("Application description"), {
+      target: { value: "Customer billing" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^create team$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^create application$/i }));
 
     await waitFor(() => {
-      expect(createTeamMock).toHaveBeenCalledWith({
-        name: "Security",
-        description: "Handles review",
+      expect(createAppMock).toHaveBeenCalledWith({
+        name: "Billing",
+        description: "Customer billing",
       });
     });
-    expect(await screen.findByText(/team security created successfully/i)).toBeInTheDocument();
+    expect(await screen.findByText(/application billing created successfully/i)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Role name"), {
-      target: { value: "Security Admin" },
+    fireEvent.change(screen.getByLabelText("Application"), {
+      target: { value: "app_billing" },
     });
-    fireEvent.change(screen.getByLabelText("Role description"), {
-      target: { value: "Owns security approvals" },
+    fireEvent.change(screen.getByLabelText("Project name"), {
+      target: { value: "Payments Core" },
     });
-    fireEvent.change(screen.getByLabelText("Scope type"), {
+    fireEvent.change(screen.getByLabelText("Project description"), {
+      target: { value: "Core payment flows" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^create project$/i }));
+
+    await waitFor(() => {
+      expect(createProjectMock).toHaveBeenCalledWith({
+        app_id: "app_billing",
+        name: "Payments Core",
+        description: "Core payment flows",
+      });
+    });
+    expect(await screen.findByText(/project payments core created successfully/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "proj_payments" },
+    });
+    fireEvent.change(screen.getByLabelText("Environment name"), {
+      target: { value: "Staging" },
+    });
+    fireEvent.change(screen.getByLabelText("Environment description"), {
+      target: { value: "Pre-production validation" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^create environment$/i }));
+
+    await waitFor(() => {
+      expect(createEnvironmentMock).toHaveBeenCalledWith({
+        project_id: "proj_payments",
+        name: "Staging",
+        description: "Pre-production validation",
+      });
+    });
+    expect(await screen.findByText(/environment staging created successfully/i)).toBeInTheDocument();
+
+    const resourcesWorkspace = screen.getByRole("region", { name: /resources workspace/i });
+
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource name"), {
+      target: { value: "Payments Queue" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource type"), {
+      target: { value: "queue" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Container type"), {
+      target: { value: "environment" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Container target"), {
+      target: { value: "env_staging" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope type"), {
       target: { value: "team" },
     });
-    fireEvent.change(screen.getByLabelText("Scope target"), {
-      target: { value: "team_security" },
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope target"), {
+      target: { value: "team_platform" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^create role$/i }));
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource description"), {
+      target: { value: "Async payment processing" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Metadata summary"), {
+      target: { value: "owner=platform\nrotation=manual" },
+    });
+    fireEvent.click(within(resourcesWorkspace).getByRole("button", { name: /^create resource$/i }));
 
     await waitFor(() => {
-      expect(createScopedRoleMock).toHaveBeenCalledWith({
-        name: "Security Admin",
-        description: "Owns security approvals",
+      expect(createResourceMock).toHaveBeenCalledWith({
+        name: "Payments Queue",
+        resource_type: "queue",
+        container_type: "environment",
+        container_id: "env_staging",
         scope_type: "team",
-        scope_id: "team_security",
+        scope_id: "team_platform",
+        description: "Async payment processing",
+        metadata: {
+          owner: "platform",
+          rotation: "manual",
+        },
       });
     });
-    expect(await screen.findByText(/scoped role security admin created successfully/i)).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Team"), {
-      target: { value: "team_security" },
-    });
-    fireEvent.change(screen.getAllByLabelText(/^Catalog user$/)[0], {
-      target: { value: "cu_ada" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /^create membership$/i }));
-
-    await waitFor(() => {
-      expect(createMembershipMock).toHaveBeenCalledWith({
-        team_id: "team_security",
-        catalog_user_id: "cu_ada",
-      });
-    });
-    expect(
-      await screen.findByText(/team membership created for ada lovelace in security/i),
-    ).toBeInTheDocument();
-
-    const assignmentRoleSelect = screen.getByLabelText("Scoped role");
-    const assignmentUserSelect = screen.getAllByLabelText(/^Catalog user$/)[1];
-    fireEvent.change(assignmentRoleSelect, {
-      target: { value: "role_security_admin" },
-    });
-    fireEvent.change(assignmentUserSelect, {
-      target: { value: "cu_ada" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /^create assignment$/i }));
-
-    await waitFor(() => {
-      expect(createAssignmentMock).toHaveBeenCalledWith({
-        scoped_role_id: "role_security_admin",
-        catalog_user_id: "cu_ada",
-      });
-    });
-    expect(
-      await screen.findByText(/direct role assignment created for ada lovelace with security admin/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/resource payments queue created successfully/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Payments Queue" })).toBeInTheDocument();
+    expect(screen.getByText(/queue · environment · staging · team · platform engineering/i)).toBeInTheDocument();
+    expect(screen.getByText(/owner=platform/i)).toBeInTheDocument();
+    expect(screen.getByText(/rotation=manual/i)).toBeInTheDocument();
   });
 
   it("surfaces organization audit failures without losing the machine-readable code", async () => {
@@ -598,109 +736,155 @@ describe("catalog workspace", () => {
     ).toBeInTheDocument();
   });
 
-  it("surfaces duplicate membership failures in-place", async () => {
+  it("surfaces resource conflict failures in-place", async () => {
     queueAuthenticatedWorkspace();
-    createMembershipMock.mockRejectedValueOnce(
+    createResourceMock.mockRejectedValueOnce(
       new AuthApiRequestError(
         409,
-        "Catalog user is already a member of this team.",
-        "team_membership_conflict",
+        "Resource already exists for this container and scope.",
+        "resource_conflict",
       ),
     );
 
     render(<OperatorPage />);
 
-    expect(await screen.findByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("Team"), {
-      target: { value: "team_platform" },
+    const resourcesWorkspace = screen.getByRole("region", { name: /resources workspace/i });
+
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource name"), {
+      target: { value: "Primary Postgres" },
     });
-    fireEvent.change(screen.getAllByLabelText(/^Catalog user$/)[0], {
-      target: { value: "cu_ada" },
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource type"), {
+      target: { value: "database" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^create membership$/i }));
-
-    await waitFor(() => {
-      expect(createMembershipMock).toHaveBeenCalledTimes(1);
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Container type"), {
+      target: { value: "environment" },
     });
-
-    expect(await screen.findByText("Catalog user is already a member of this team.")).toBeInTheDocument();
-    expect(
-      await screen.findByText("Failure code: team_membership_conflict"),
-    ).toBeInTheDocument();
-  });
-
-  it("surfaces duplicate assignment failures in-place", async () => {
-    queueAuthenticatedWorkspace();
-    createAssignmentMock.mockRejectedValueOnce(
-      new AuthApiRequestError(
-        409,
-        "Catalog user already has this scoped role.",
-        "direct_role_assignment_conflict",
-      ),
-    );
-
-    render(<OperatorPage />);
-
-    expect(await screen.findByRole("heading", { name: "Team Maintainer" })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Scoped role"), {
-      target: { value: "role_team_maintainer" },
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Container target"), {
+      target: { value: "env_prod" },
     });
-    fireEvent.change(screen.getAllByLabelText(/^Catalog user$/)[1], {
-      target: { value: "cu_ada" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /^create assignment$/i }));
-
-    await waitFor(() => {
-      expect(createAssignmentMock).toHaveBeenCalledTimes(1);
-    });
-
-    expect(
-      await screen.findByText("Catalog user already has this scoped role."),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText("Failure code: direct_role_assignment_conflict"),
-    ).toBeInTheDocument();
-  });
-
-  it("surfaces scoped-role scope mismatch failures in-place", async () => {
-    queueAuthenticatedWorkspace();
-    createScopedRoleMock.mockRejectedValueOnce(
-      new AuthApiRequestError(
-        422,
-        "Scoped role scope_type and scope_id do not match a valid catalog container.",
-        "scoped_role_scope_mismatch",
-      ),
-    );
-
-    render(<OperatorPage />);
-
-    expect(await screen.findByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText("Role name"), {
-      target: { value: "Broken Role" },
-    });
-    fireEvent.change(screen.getByLabelText("Scope type"), {
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope type"), {
       target: { value: "team" },
     });
-    fireEvent.change(screen.getByLabelText("Scope target"), {
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope target"), {
       target: { value: "team_platform" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^create role$/i }));
+    fireEvent.click(within(resourcesWorkspace).getByRole("button", { name: /^create resource$/i }));
 
     await waitFor(() => {
-      expect(createScopedRoleMock).toHaveBeenCalledTimes(1);
+      expect(createResourceMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByText("Resource already exists for this container and scope.")).toBeInTheDocument();
+    expect(await screen.findByText("Failure code: resource_conflict")).toBeInTheDocument();
+  });
+
+  it("surfaces project-not-found failures in-place", async () => {
+    queueAuthenticatedWorkspace();
+    createEnvironmentMock.mockRejectedValueOnce(
+      new AuthApiRequestError(
+        404,
+        "Project was not found.",
+        "project_not_found",
+      ),
+    );
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByRole("heading", { name: "Production" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Project"), {
+      target: { value: "proj_identity" },
+    });
+    fireEvent.change(screen.getByLabelText("Environment name"), {
+      target: { value: "Disaster Recovery" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^create environment$/i }));
+
+    await waitFor(() => {
+      expect(createEnvironmentMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(await screen.findByText("Project was not found.")).toBeInTheDocument();
+    expect(await screen.findByText("Failure code: project_not_found")).toBeInTheDocument();
+  });
+
+  it("surfaces resource scope mismatch failures in-place", async () => {
+    queueAuthenticatedWorkspace();
+    createResourceMock.mockRejectedValueOnce(
+      new AuthApiRequestError(
+        422,
+        "Resource scope_type and scope_id do not match a valid catalog hierarchy.",
+        "resource_scope_mismatch",
+      ),
+    );
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
+
+    const resourcesWorkspace = screen.getByRole("region", { name: /resources workspace/i });
+
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Resource name"), {
+      target: { value: "Broken Resource" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope type"), {
+      target: { value: "team" },
+    });
+    fireEvent.change(within(resourcesWorkspace).getByLabelText("Scope target"), {
+      target: { value: "team_platform" },
+    });
+    fireEvent.click(within(resourcesWorkspace).getByRole("button", { name: /^create resource$/i }));
+
+    await waitFor(() => {
+      expect(createResourceMock).toHaveBeenCalledTimes(1);
     });
 
     expect(
       await screen.findByText(
-        "Scoped role scope_type and scope_id do not match a valid catalog container.",
+        "Resource scope_type and scope_id do not match a valid catalog hierarchy.",
       ),
     ).toBeInTheDocument();
+    expect(await screen.findByText("Failure code: resource_scope_mismatch")).toBeInTheDocument();
+  });
+
+  it("surfaces resource secret-payload failures in-place", async () => {
+    queueAuthenticatedWorkspace();
+    createResourceMock.mockRejectedValueOnce(
+      new AuthApiRequestError(
+        422,
+        "Resource metadata must stay descriptive and cannot store secret payloads.",
+        "resource_secret_payload_forbidden",
+      ),
+    );
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Resource name"), {
+      target: { value: "Unsafe Resource" },
+    });
+    fireEvent.change(screen.getByLabelText("Metadata summary"), {
+      target: { value: "password=hunter2" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^create resource$/i }));
+
+    await waitFor(() => {
+      expect(createResourceMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { password: "hunter2" },
+        }),
+      );
+    });
+
     expect(
-      await screen.findByText("Failure code: scoped_role_scope_mismatch"),
+      await screen.findByText(
+        "Resource metadata must stay descriptive and cannot store secret payloads.",
+      ),
     ).toBeInTheDocument();
+    expect(await screen.findByText("Failure code: resource_secret_payload_forbidden")).toBeInTheDocument();
   });
 
   it("redirects to sign-in if the catalog workspace read detects auth expiry", async () => {

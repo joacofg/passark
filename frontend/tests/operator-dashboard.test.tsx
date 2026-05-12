@@ -40,6 +40,10 @@ vi.mock("../lib/catalog", async () => {
     createScopedRole: vi.fn(),
     createMembership: vi.fn(),
     createAssignment: vi.fn(),
+    createApp: vi.fn(),
+    createProject: vi.fn(),
+    createEnvironment: vi.fn(),
+    createResource: vi.fn(),
   };
 });
 
@@ -109,6 +113,60 @@ const workspaceFixture = {
       created_at: "2024-01-01T00:00:00Z",
     },
   ],
+  apps: [
+    {
+      id: "app_console",
+      organization_id: "org_123",
+      name: "Operator Console",
+      description: "Primary operator interface",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  projects: [
+    {
+      id: "proj_identity",
+      organization_id: "org_123",
+      app_id: "app_console",
+      name: "Identity Graph",
+      description: "Catalog graph project",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  environments: [
+    {
+      id: "env_prod",
+      organization_id: "org_123",
+      project_id: "proj_identity",
+      name: "Production",
+      description: "Primary production environment",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
+  resources: [
+    {
+      id: "res_pg",
+      organization_id: "org_123",
+      app_id: "app_console",
+      project_id: "proj_identity",
+      environment_id: "env_prod",
+      name: "Primary Postgres",
+      resource_type: "database" as const,
+      container_type: "environment" as const,
+      container_id: "env_prod",
+      scope_type: "team" as const,
+      scope_id: "team_platform",
+      description: "Stores catalog state",
+      metadata: {
+        owner: "platform",
+        rotation: "manual",
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    },
+  ],
 };
 
 describe("OperatorPage", () => {
@@ -140,8 +198,13 @@ describe("OperatorPage", () => {
     expect(screen.getByRole("button", { name: /edit ada lovelace/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Team Maintainer" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Team memberships" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Direct role assignments" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Operator Console" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Identity Graph" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Production" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/application → project → environment → typed resource hierarchy/i),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/validation, conflict, not-found, scope mismatch, and audit-write failures remain visible/i),
     ).toBeInTheDocument();

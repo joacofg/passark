@@ -54,7 +54,7 @@ make frontend-lint     # run tracked frontend lint on the host
 make quality-gates     # run the fast host-side tests/lint checks without compose-backed environment proof
 make verify-s01        # assert compose health plus backend/frontend smoke checks
 make verify-s02        # prove auth rejects anonymous access and unlocks protected UI/API flow
-make verify-s03        # prove audited sensitive access plus fail-closed denial and persisted audit rows
+make verify-s03        # prove app→project→environment→resource creation/readback and stable hierarchy failure codes
 make verify-milestone  # run the canonical compose-backed milestone proof in S02 -> S03 order
 make down              # stop the stack
 ```
