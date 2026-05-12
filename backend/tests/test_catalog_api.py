@@ -631,13 +631,28 @@ def test_team_and_scoped_role_catalog_happy_paths(client, db_session):
     team_response = client.post(
         "/api/v1/catalog/teams",
         json={"name": " Platform Engineering ", "description": "Owns backend systems "},
+        headers={
+            "x-correlation-id": "team-corr-001",
+            "x-request-id": "team-req-001",
+            "user-agent": "pytest-catalog",
+        },
     )
     assert team_response.status_code == 201
     team = team_response.json()["team"]
+    assert team_response.json()["audit_event_id"] > 0
+    assert team_response.json()["correlation_id"] == "team-corr-001"
     assert team["id"].startswith("team_")
     assert team["organization_id"] == "org_fixture"
     assert team["name"] == "Platform Engineering"
     assert team["description"] == "Owns backend systems"
+
+    team_audit_event = db_session.query(AuditEvent).filter_by(id=team_response.json()["audit_event_id"]).one()
+    assert team_audit_event.operation == "catalog_team_mutation"
+    assert team_audit_event.outcome == "sensitive_operation_allowed"
+    assert team_audit_event.reason_code == "sensitive_operation_allowed"
+    assert team_audit_event.request_id == "team-req-001"
+    assert team_audit_event.correlation_id == "team-corr-001"
+    assert "passark_session" not in str(team_audit_event.metadata_json)
 
     org_role_response = client.post(
         "/api/v1/catalog/roles",
@@ -835,12 +850,26 @@ def test_memberships_and_assignments_support_happy_paths_and_observable_listing(
     membership_response = client.post(
         "/api/v1/catalog/memberships",
         json={"team_id": "team_fixture", "catalog_user_id": "cu_fixture"},
+        headers={
+            "x-correlation-id": "membership-corr-001",
+            "x-request-id": "membership-req-001",
+            "user-agent": "pytest-catalog",
+        },
     )
     assert membership_response.status_code == 201
     membership = membership_response.json()["membership"]
+    assert membership_response.json()["audit_event_id"] > 0
+    assert membership_response.json()["correlation_id"] == "membership-corr-001"
     assert membership["id"].startswith("tm_")
     assert membership["team_id"] == "team_fixture"
     assert membership["catalog_user_id"] == "cu_fixture"
+
+    membership_audit_event = db_session.query(AuditEvent).filter_by(id=membership_response.json()["audit_event_id"]).one()
+    assert membership_audit_event.operation == "catalog_membership_mutation"
+    assert membership_audit_event.outcome == "sensitive_operation_allowed"
+    assert membership_audit_event.reason_code == "sensitive_operation_allowed"
+    assert membership_audit_event.request_id == "membership-req-001"
+    assert membership_audit_event.correlation_id == "membership-corr-001"
 
     assignment_response = client.post(
         "/api/v1/catalog/assignments",
@@ -1042,9 +1071,16 @@ def test_app_project_environment_and_resource_happy_path(client, db_session):
             "description": "Aurora cluster backing order writes",
             "metadata": {"engine": "postgres", "tier": "production"},
         },
+        headers={
+            "x-correlation-id": "resource-corr-001",
+            "x-request-id": "resource-req-001",
+            "user-agent": "pytest-catalog",
+        },
     )
     assert resource_response.status_code == 201
     resource = resource_response.json()["resource"]
+    assert resource_response.json()["audit_event_id"] > 0
+    assert resource_response.json()["correlation_id"] == "resource-corr-001"
     assert resource["id"].startswith("res_")
     assert resource["app_id"] == app["id"]
     assert resource["project_id"] == project["id"]
@@ -1053,6 +1089,15 @@ def test_app_project_environment_and_resource_happy_path(client, db_session):
     assert resource["container_type"] == "environment"
     assert resource["scope_type"] == "team"
     assert resource["metadata"] == {"engine": "postgres", "tier": "production"}
+
+    resource_audit_event = db_session.query(AuditEvent).filter_by(id=resource_response.json()["audit_event_id"]).one()
+    assert resource_audit_event.operation == "catalog_resource_mutation"
+    assert resource_audit_event.outcome == "sensitive_operation_allowed"
+    assert resource_audit_event.reason_code == "sensitive_operation_allowed"
+    assert resource_audit_event.request_id == "resource-req-001"
+    assert resource_audit_event.correlation_id == "resource-corr-001"
+    assert "passark_session" not in str(resource_audit_event.metadata_json)
+    assert "token" not in str(resource_audit_event.metadata_json)
 
     assert client.get("/api/v1/catalog/apps").json()["items"] == [app]
     assert client.get("/api/v1/catalog/projects").json()["items"] == [project]
@@ -1276,3 +1321,102 @@ def test_app_project_environment_and_resource_failures_are_machine_readable(clie
             "message": "Resource already exists for this container and scope.",
         }
     }
+
+
+def test_audited_catalog_mutations_fail_closed_when_audit_write_fails(client, db_session, monkeypatch):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    catalog_user = CatalogUser(
+        id="cu_fixture",
+        organization_id=organization.id,
+        email="operator@example.com",
+        full_name="Operator User",
+        job_title="Ops Lead",
+        is_active=True,
+    )
+    team = Team(
+        id="team_fixture",
+        organization_id=organization.id,
+        name="Security",
+        description="Handles review",
+    )
+    app = App(
+        id="app_fixture",
+        organization_id=organization.id,
+        name="Customer Portal",
+        description="Primary frontend",
+    )
+    project = Project(
+        id="proj_fixture",
+        organization_id=organization.id,
+        app_id=app.id,
+        name="Identity API",
+        description="Backend service",
+    )
+    environment = Environment(
+        id="env_fixture",
+        organization_id=organization.id,
+        project_id=project.id,
+        name="Production",
+        description="Live env",
+    )
+    db_session.add_all([organization, catalog_user, team, app, project, environment])
+    db_session.commit()
+
+    def explode(*args, **kwargs):
+        raise SQLAlchemyError("audit insert failed")
+
+    monkeypatch.setattr(SensitiveOperationAuditWriter, "record", explode)
+
+    team_response = client.post(
+        "/api/v1/catalog/teams",
+        json={"name": "Platform", "description": "Owns backend systems"},
+    )
+    assert team_response.status_code == 503
+    assert team_response.json() == {
+        "detail": {
+            "code": "audit_unavailable",
+            "message": "Audit logging is required for this operation.",
+        }
+    }
+    assert db_session.query(Team).filter_by(name="Platform").count() == 0
+
+    membership_response = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": "team_fixture", "catalog_user_id": "cu_fixture"},
+    )
+    assert membership_response.status_code == 503
+    assert membership_response.json() == {
+        "detail": {
+            "code": "audit_unavailable",
+            "message": "Audit logging is required for this operation.",
+        }
+    }
+    assert db_session.query(TeamMembership).count() == 0
+
+    resource_response = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Orders Database",
+            "resource_type": "database",
+            "container_type": "environment",
+            "container_id": "env_fixture",
+            "scope_type": "team",
+            "scope_id": "team_fixture",
+            "description": "Aurora cluster backing order writes",
+            "metadata": {"engine": "postgres"},
+        },
+    )
+    assert resource_response.status_code == 503
+    assert resource_response.json() == {
+        "detail": {
+            "code": "audit_unavailable",
+            "message": "Audit logging is required for this operation.",
+        }
+    }
+    assert db_session.query(Resource).count() == 0

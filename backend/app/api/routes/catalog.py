@@ -24,8 +24,10 @@ from app.db.base import (
 )
 from app.db.session import (
     SensitiveOperationAuditWriter,
+    SensitiveOperationContext,
     get_current_user,
     get_db,
+    get_sensitive_operation_guard,
 )
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -213,6 +215,11 @@ class TeamMutationResponse(BaseModel):
     team: TeamResponse
 
 
+class AuditedTeamMutationResponse(TeamMutationResponse):
+    audit_event_id: int
+    correlation_id: str
+
+
 class ScopedRoleResponse(BaseModel):
     id: str
     organization_id: str
@@ -261,6 +268,11 @@ class TeamMembershipListResponse(BaseModel):
 
 class TeamMembershipMutationResponse(BaseModel):
     membership: TeamMembershipResponse
+
+
+class AuditedTeamMembershipMutationResponse(TeamMembershipMutationResponse):
+    audit_event_id: int
+    correlation_id: str
 
 
 class DirectRoleAssignmentResponse(BaseModel):
@@ -398,6 +410,11 @@ class ResourceListResponse(BaseModel):
 
 class ResourceMutationResponse(BaseModel):
     resource: ResourceResponse
+
+
+class AuditedResourceMutationResponse(ResourceMutationResponse):
+    audit_event_id: int
+    correlation_id: str
 
 
 class CatalogUserRelationshipTeamMembershipResponse(BaseModel):
@@ -593,6 +610,13 @@ def _serialize_resource(resource: Resource) -> ResourceResponse:
             "updated_at": resource.updated_at.isoformat(),
         }
     )
+
+
+def _audited_response_kwargs(context: SensitiveOperationContext) -> dict[str, int | str]:
+    return {
+        "audit_event_id": context.audit_event.id,
+        "correlation_id": context.audit_event.correlation_id or "",
+    }
 
 
 def _serialize_catalog_user_relationship_membership(
@@ -853,6 +877,11 @@ def _resolve_catalog_user_relationship_resources(
     return items
 
 
+sensitive_team_mutation_guard = get_sensitive_operation_guard("catalog_team_mutation")
+sensitive_membership_mutation_guard = get_sensitive_operation_guard("catalog_membership_mutation")
+sensitive_resource_mutation_guard = get_sensitive_operation_guard("catalog_resource_mutation")
+
+
 @router.get("/organization", response_model=OrganizationResponse)
 def read_organization(
     current_user: User = Depends(get_current_user),
@@ -1036,13 +1065,13 @@ def list_teams(
     return TeamListResponse(items=[_serialize_team(item) for item in items])
 
 
-@router.post("/teams", response_model=TeamMutationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/teams", response_model=AuditedTeamMutationResponse, status_code=status.HTTP_201_CREATED)
 def create_team(
     payload: TeamCreateRequest,
-    current_user: User = Depends(get_current_user),
+    context: SensitiveOperationContext = Depends(sensitive_team_mutation_guard),
     db: OrmSession = Depends(get_db),
-) -> TeamMutationResponse:
-    del current_user
+) -> AuditedTeamMutationResponse:
+    del context.user
     organization = _get_or_create_organization_root(db)
     team = Team(
         id=f"team_{uuid4().hex}",
@@ -1057,7 +1086,7 @@ def create_team(
         db.rollback()
         _raise_duplicate_team()
     db.refresh(team)
-    return TeamMutationResponse(team=_serialize_team(team))
+    return AuditedTeamMutationResponse(team=_serialize_team(team), **_audited_response_kwargs(context))
 
 
 @router.get("/roles", response_model=ScopedRoleListResponse)
@@ -1123,13 +1152,13 @@ def list_team_memberships(
     return TeamMembershipListResponse(items=[_serialize_team_membership(item) for item in items])
 
 
-@router.post("/memberships", response_model=TeamMembershipMutationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/memberships", response_model=AuditedTeamMembershipMutationResponse, status_code=status.HTTP_201_CREATED)
 def create_team_membership(
     payload: TeamMembershipCreateRequest,
-    current_user: User = Depends(get_current_user),
+    context: SensitiveOperationContext = Depends(sensitive_membership_mutation_guard),
     db: OrmSession = Depends(get_db),
-) -> TeamMembershipMutationResponse:
-    del current_user
+) -> AuditedTeamMembershipMutationResponse:
+    del context.user
     organization = _get_or_create_organization_root(db)
     team = _get_team_or_404(payload.team_id.strip(), organization.id, db)
     catalog_user = _get_catalog_user_or_404(payload.catalog_user_id.strip(), organization.id, db)
@@ -1146,7 +1175,10 @@ def create_team_membership(
         db.rollback()
         _raise_duplicate_team_membership()
     db.refresh(membership)
-    return TeamMembershipMutationResponse(membership=_serialize_team_membership(membership))
+    return AuditedTeamMembershipMutationResponse(
+        membership=_serialize_team_membership(membership),
+        **_audited_response_kwargs(context),
+    )
 
 
 @router.get("/assignments", response_model=DirectRoleAssignmentListResponse)
@@ -1327,13 +1359,13 @@ def list_resources(
     return ResourceListResponse(items=[_serialize_resource(item) for item in items])
 
 
-@router.post("/resources", response_model=ResourceMutationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/resources", response_model=AuditedResourceMutationResponse, status_code=status.HTTP_201_CREATED)
 def create_resource(
     payload: ResourceCreateRequest,
-    current_user: User = Depends(get_current_user),
+    context: SensitiveOperationContext = Depends(sensitive_resource_mutation_guard),
     db: OrmSession = Depends(get_db),
-) -> ResourceMutationResponse:
-    del current_user
+) -> AuditedResourceMutationResponse:
+    del context.user
     organization = _get_or_create_organization_root(db)
     resource_type = payload.resource_type.strip().lower()
     if resource_type not in ALLOWED_RESOURCE_TYPES:
@@ -1378,4 +1410,4 @@ def create_resource(
         db.rollback()
         _raise_duplicate_resource()
     db.refresh(resource)
-    return ResourceMutationResponse(resource=_serialize_resource(resource))
+    return AuditedResourceMutationResponse(resource=_serialize_resource(resource), **_audited_response_kwargs(context))
