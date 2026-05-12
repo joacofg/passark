@@ -694,10 +694,12 @@ describe("catalog workspace", () => {
       });
     });
     expect(await screen.findByText(/resource payments queue created successfully/i)).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Payments Queue" })).toBeInTheDocument();
+    const createdResourceHeading = await screen.findByRole("heading", { name: "Payments Queue" });
+    const createdResourceCard = createdResourceHeading.closest("li");
+    expect(createdResourceCard).not.toBeNull();
     expect(screen.getByText(/queue · environment · staging · team · platform engineering/i)).toBeInTheDocument();
-    expect(screen.getByText(/owner=platform/i)).toBeInTheDocument();
-    expect(screen.getByText(/rotation=manual/i)).toBeInTheDocument();
+    expect(within(createdResourceCard as HTMLElement).getByText(/owner=platform/i)).toBeInTheDocument();
+    expect(within(createdResourceCard as HTMLElement).getByText(/rotation=manual/i)).toBeInTheDocument();
   });
 
   it("surfaces organization audit failures without losing the machine-readable code", async () => {
