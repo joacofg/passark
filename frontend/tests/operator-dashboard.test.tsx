@@ -33,6 +33,7 @@ vi.mock("../lib/catalog", async () => {
   return {
     ...actual,
     readCatalogWorkspace: vi.fn(),
+    readCatalogUserRelationship: vi.fn(),
     updateOrganization: vi.fn(),
     createCatalogUser: vi.fn(),
     updateCatalogUser: vi.fn(),
@@ -48,11 +49,12 @@ vi.mock("../lib/catalog", async () => {
 });
 
 const { logout, readProtectedWhoAmI } = await import("../lib/auth");
-const { readCatalogWorkspace } = await import("../lib/catalog");
+const { readCatalogUserRelationship, readCatalogWorkspace } = await import("../lib/catalog");
 
 const logoutMock = vi.mocked(logout);
 const readProtectedWhoAmIMock = vi.mocked(readProtectedWhoAmI);
 const readCatalogWorkspaceMock = vi.mocked(readCatalogWorkspace);
+const readCatalogUserRelationshipMock = vi.mocked(readCatalogUserRelationship);
 
 const workspaceFixture = {
   organization: {
@@ -169,6 +171,30 @@ const workspaceFixture = {
   ],
 };
 
+const relationshipFixture = {
+  catalog_user: workspaceFixture.users[0],
+  memberships: [
+    {
+      membership: workspaceFixture.memberships[0],
+      team: workspaceFixture.teams[0],
+    },
+  ],
+  assignments: [
+    {
+      assignment: workspaceFixture.assignments[0],
+      scoped_role: workspaceFixture.scoped_roles[0],
+    },
+  ],
+  resources: [
+    {
+      resource: workspaceFixture.resources[0],
+      app: workspaceFixture.apps[0],
+      project: workspaceFixture.projects[0],
+      environment: workspaceFixture.environments[0],
+    },
+  ],
+};
+
 describe("OperatorPage", () => {
   beforeEach(() => {
     pushMock.mockReset();
@@ -177,6 +203,7 @@ describe("OperatorPage", () => {
     logoutMock.mockReset();
     readProtectedWhoAmIMock.mockReset();
     readCatalogWorkspaceMock.mockReset();
+    readCatalogUserRelationshipMock.mockReset();
   });
 
   it("renders the real catalog workspace after the backend session resolves", async () => {
@@ -185,6 +212,7 @@ describe("OperatorPage", () => {
       session_id: 42,
     });
     readCatalogWorkspaceMock.mockResolvedValueOnce(workspaceFixture);
+    readCatalogUserRelationshipMock.mockResolvedValueOnce(relationshipFixture);
 
     render(<OperatorPage />);
 
@@ -202,6 +230,8 @@ describe("OperatorPage", () => {
     expect(screen.getByRole("heading", { name: "Identity Graph" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Production" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /user relationship workspace/i })).toBeInTheDocument();
+    expect(screen.getByText(/switch one selected catalog user and inspect memberships, scoped roles, and attached resources/i)).toBeInTheDocument();
     expect(
       screen.getByText(/application → project → environment → typed resource hierarchy/i),
     ).toBeInTheDocument();

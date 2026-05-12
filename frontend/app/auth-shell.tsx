@@ -17,6 +17,10 @@ import {
   type AppCreateInput,
   type CatalogUser,
   type CatalogUserCreateInput,
+  type CatalogUserRelationship,
+  type CatalogUserRelationshipAssignment,
+  type CatalogUserRelationshipMembership,
+  type CatalogUserRelationshipResource,
   type CatalogUserUpdateInput,
   type CatalogWorkspaceData,
   type DirectRoleAssignment,
@@ -44,6 +48,7 @@ import {
   createScopedRole,
   createTeam,
   decodeCatalogError,
+  readCatalogUserRelationship,
   readCatalogWorkspace,
   updateCatalogUser,
   updateOrganization,
@@ -87,6 +92,12 @@ type MutationNotice =
   | { tone: "success"; message: string }
   | { tone: "error"; message: string; code?: string }
   | null;
+
+type RelationshipState =
+  | { status: "idle" }
+  | { status: "loading"; catalogUserId: string }
+  | { status: "ready"; catalogUserId: string; data: CatalogUserRelationship }
+  | { status: "error"; catalogUserId: string; message: string; code?: string };
 
 type OrganizationFormState = {
   display_name: string;
@@ -1643,6 +1654,199 @@ function ResourcesPanel({
   );
 }
 
+function renderRelationshipResourceContainer(
+  resource: CatalogUserRelationshipResource): string {
+  if (resource.environment) {
+    return `Environment · ${resource.environment.name}`;
+  }
+  if (resource.project) {
+    return `Project · ${resource.project.name}`;
+  }
+  if (resource.app) {
+    return `App · ${resource.app.name}`;
+  }
+  return `Container · ${resource.resource.container_id}`;
+}
+
+function renderRelationshipResourceScope(
+  resource: CatalogUserRelationshipResource,
+  organizationId: string,
+  teams: Team[],
+): string {
+  if (
+    resource.resource.scope_type === "organization" &&
+    resource.resource.scope_id === organizationId
+  ) {
+    return "Organization";
+  }
+
+  return `Team · ${resolveTeamName(resource.resource.scope_id, teams)}`;
+}
+
+function RelationshipWorkspacePanel({
+  users,
+  teams,
+  organizationId,
+  selectedCatalogUserId,
+  relationshipState,
+  onSelectUser,
+}: {
+  users: CatalogUser[];
+  teams: Team[];
+  organizationId: string;
+  selectedCatalogUserId: string;
+  relationshipState: RelationshipState;
+  onSelectUser: (catalogUserId: string) => void;
+}) {
+  const selectedUser =
+    users.find((user) => user.id === selectedCatalogUserId) ?? null;
+
+  const relationshipData =
+    relationshipState.status === "ready" ? relationshipState.data : null;
+  const memberships = relationshipData?.memberships ?? [];
+  const assignments = relationshipData?.assignments ?? [];
+  const resources = relationshipData?.resources ?? [];
+
+  return (
+    <section className="workspace-card" aria-label="User relationship workspace">
+      <div className="workspace-card__header">
+        <div>
+          <p className="eyebrow">User-centered relationship graph</p>
+          <h2>User relationship workspace</h2>
+          <p className="workspace-copy">
+            Select one catalog user to read memberships, scoped roles, and attached resources
+            through the protected relationship aggregate instead of correlating separate lists by hand.
+          </p>
+        </div>
+      </div>
+
+      <div className="catalog-layout">
+        <form className="workspace-form">
+          <label className="field">
+            <span>Selected catalog user</span>
+            <select
+              name="selected_catalog_user_id"
+              onChange={(event) => onSelectUser(event.target.value)}
+              value={selectedCatalogUserId}
+            >
+              <option value="">Choose a catalog user</option>
+              {users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {selectedUser ? (
+            <div className="status-card" aria-label="Selected user summary">
+              <h3>{selectedUser.full_name}</h3>
+              <p>{selectedUser.email}</p>
+              <span>
+                {selectedUser.job_title ? `${selectedUser.job_title} · ` : ""}
+                {selectedUser.is_active ? "Active" : "Inactive"}
+              </span>
+            </div>
+          ) : (
+            <div className="empty-state" role="status">
+              <h3>No catalog user selected</h3>
+              <p>Choose a catalog user to inspect their live relationship graph.</p>
+            </div>
+          )}
+        </form>
+
+        <div className="workspace-grid">
+          {relationshipState.status === "loading" ? (
+            <div className="workspace-card" role="status">
+              <h3>Loading selected user relationships…</h3>
+              <p className="workspace-copy">
+                Waiting for the protected relationship aggregate to resolve for the selected catalog user.
+              </p>
+            </div>
+          ) : null}
+
+          {relationshipState.status === "error" ? (
+            <div className="fallback-card" role="alert">
+              <h3>Unable to load selected user relationships</h3>
+              <p>{relationshipState.message}</p>
+              {relationshipState.code ? <p>Failure code: {relationshipState.code}</p> : null}
+            </div>
+          ) : null}
+
+          {relationshipState.status === "ready" ? (
+            <>
+              <section className="workspace-card" aria-label="Selected user memberships">
+                <h3>Memberships</h3>
+                {memberships.length === 0 ? (
+                  <div className="empty-state" role="status">
+                    <p>This catalog user does not belong to any teams yet.</p>
+                  </div>
+                ) : (
+                  <ul className="catalog-user-list" aria-label="Selected user memberships list">
+                    {memberships.map((item: CatalogUserRelationshipMembership) => (
+                      <li className="catalog-user-item" key={item.membership.id}>
+                        <div>
+                          <h4>{item.team.name}</h4>
+                          <p>{item.team.description ?? "No description"}</p>
+                          <span>Membership ID {item.membership.id}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="workspace-card" aria-label="Selected user assignments">
+                <h3>Scoped roles</h3>
+                {assignments.length === 0 ? (
+                  <div className="empty-state" role="status">
+                    <p>This catalog user does not have any direct scoped roles yet.</p>
+                  </div>
+                ) : (
+                  <ul className="catalog-user-list" aria-label="Selected user assignments list">
+                    {assignments.map((item: CatalogUserRelationshipAssignment) => (
+                      <li className="catalog-user-item" key={item.assignment.id}>
+                        <div>
+                          <h4>{item.scoped_role.name}</h4>
+                          <p>{item.scoped_role.description ?? "No description"}</p>
+                          <span>{resolveScopeLabel(item.scoped_role, teams)}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section className="workspace-card" aria-label="Selected user resources">
+                <h3>Attached resources</h3>
+                {resources.length === 0 ? (
+                  <div className="empty-state" role="status">
+                    <p>This catalog user does not have any attached resource relationships yet.</p>
+                  </div>
+                ) : (
+                  <ul className="catalog-user-list" aria-label="Selected user resources list">
+                    {resources.map((item: CatalogUserRelationshipResource) => (
+                      <li className="catalog-user-item" key={item.resource.id}>
+                        <div>
+                          <h4>{item.resource.name}</h4>
+                          <p>{item.resource.description ?? "No description"}</p>
+                          <span>
+                            {item.resource.resource_type} · {renderRelationshipResourceContainer(item)} · {renderRelationshipResourceScope(item, organizationId, teams)}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function OperatorShell() {
   const router = useRouter();
   const [identityState, setIdentityState] = useState<OperatorIdentityState>({ status: "loading" });
@@ -1671,6 +1875,8 @@ export function OperatorShell() {
   const [environmentNotice, setEnvironmentNotice] = useState<MutationNotice>(null);
   const [resourceForm, setResourceForm] = useState<ResourceFormState>(emptyResourceForm());
   const [resourceNotice, setResourceNotice] = useState<MutationNotice>(null);
+  const [relationshipState, setRelationshipState] = useState<RelationshipState>({ status: "idle" });
+  const [selectedRelationshipUserId, setSelectedRelationshipUserId] = useState("");
   const [isSavingOrganization, setIsSavingOrganization] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [isSavingTeam, setIsSavingTeam] = useState(false);
@@ -1730,6 +1936,12 @@ export function OperatorShell() {
               : data.environments[0]?.id) ||
           "",
       }));
+      setSelectedRelationshipUserId((current) => {
+        if (current && data.users.some((user) => user.id === current)) {
+          return current;
+        }
+        return data.users[0]?.id ?? "";
+      });
       if (userMode.mode === "create") {
         setUserForm(emptyUserForm());
       }
@@ -1788,6 +2000,54 @@ export function OperatorShell() {
 
     void loadWorkspace();
   }, [identityState.status]);
+
+  useEffect(() => {
+    if (!selectedRelationshipUserId) {
+      setRelationshipState({ status: "idle" });
+      return;
+    }
+
+    let isMounted = true;
+    setRelationshipState({ status: "loading", catalogUserId: selectedRelationshipUserId });
+
+    async function loadRelationship() {
+      try {
+        const data = await readCatalogUserRelationship(selectedRelationshipUserId);
+        if (!isMounted) {
+          return;
+        }
+
+        setRelationshipState({
+          status: "ready",
+          catalogUserId: selectedRelationshipUserId,
+          data,
+        });
+      } catch (error) {
+        if (!isMounted) {
+          return;
+        }
+
+        if (isUnauthenticatedError(error)) {
+          await redirectToLogin();
+          return;
+        }
+
+        const relationshipError = deriveWorkspaceError(error);
+        setRelationshipState({
+          status: "error",
+          catalogUserId: selectedRelationshipUserId,
+          message: relationshipError.message,
+          code: relationshipError.code,
+        });
+      }
+    }
+
+    void loadRelationship();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedRelationshipUserId]);
 
   const selectedUser = useMemo(() => {
     if (!workspaceData || userMode.mode !== "edit") {
@@ -2218,6 +2478,13 @@ export function OperatorShell() {
                 with stable backend failure codes for operator troubleshooting.
               </p>
             </article>
+            <article className="dashboard-card">
+              <h2>User relationship focus</h2>
+              <p>
+                The operator can switch one selected catalog user and inspect memberships,
+                scoped roles, and attached resources from one dedicated relationship workspace.
+              </p>
+            </article>
           </section>
 
           {workspaceState.status === "loading" || workspaceState.status === "idle" ? (
@@ -2258,6 +2525,15 @@ export function OperatorShell() {
                 onStartCreate={handleStartCreateUser}
                 onStartEdit={handleStartEditUser}
                 onSubmit={handleUserSubmit}
+                users={workspaceData.users}
+              />
+
+              <RelationshipWorkspacePanel
+                onSelectUser={setSelectedRelationshipUserId}
+                organizationId={workspaceData.organization.id}
+                relationshipState={relationshipState}
+                selectedCatalogUserId={selectedRelationshipUserId}
+                teams={workspaceData.teams}
                 users={workspaceData.users}
               />
 

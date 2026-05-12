@@ -33,6 +33,7 @@ vi.mock("../lib/catalog", async () => {
   return {
     ...actual,
     readCatalogWorkspace: vi.fn(),
+    readCatalogUserRelationship: vi.fn(),
     updateOrganization: vi.fn(),
     createCatalogUser: vi.fn(),
     updateCatalogUser: vi.fn(),
@@ -58,6 +59,7 @@ const {
   createResource,
   createScopedRole,
   createTeam,
+  readCatalogUserRelationship,
   readCatalogWorkspace,
   updateCatalogUser,
   updateOrganization,
@@ -65,6 +67,7 @@ const {
 
 const readProtectedWhoAmIMock = vi.mocked(readProtectedWhoAmI);
 const readCatalogWorkspaceMock = vi.mocked(readCatalogWorkspace);
+const readCatalogUserRelationshipMock = vi.mocked(readCatalogUserRelationship);
 const updateOrganizationMock = vi.mocked(updateOrganization);
 const createCatalogUserMock = vi.mocked(createCatalogUser);
 const updateCatalogUserMock = vi.mocked(updateCatalogUser);
@@ -192,14 +195,42 @@ const baseWorkspace = {
   ],
 };
 
+const baseRelationship = {
+  catalog_user: baseWorkspace.users[0],
+  memberships: [
+    {
+      membership: baseWorkspace.memberships[0],
+      team: baseWorkspace.teams[0],
+    },
+  ],
+  assignments: [
+    {
+      assignment: baseWorkspace.assignments[0],
+      scoped_role: baseWorkspace.scoped_roles[0],
+    },
+  ],
+  resources: [
+    {
+      resource: baseWorkspace.resources[0],
+      app: baseWorkspace.apps[0],
+      project: baseWorkspace.projects[0],
+      environment: baseWorkspace.environments[0],
+    },
+  ],
+};
+
 function queueAuthenticatedWorkspace(
   workspace: typeof baseWorkspace = baseWorkspace,
+  relationship = baseRelationship,
 ) {
   readProtectedWhoAmIMock.mockResolvedValueOnce({
     user: { id: 1, email: "admin@passark.local", is_active: true },
     session_id: 12,
   });
   readCatalogWorkspaceMock.mockResolvedValueOnce(workspace);
+  if (workspace.users.length > 0) {
+    readCatalogUserRelationshipMock.mockResolvedValueOnce(relationship);
+  }
 }
 
 describe("catalog workspace", () => {
@@ -209,6 +240,7 @@ describe("catalog workspace", () => {
     refreshMock.mockReset();
     readProtectedWhoAmIMock.mockReset();
     readCatalogWorkspaceMock.mockReset();
+    readCatalogUserRelationshipMock.mockReset();
     updateOrganizationMock.mockReset();
     createCatalogUserMock.mockReset();
     updateCatalogUserMock.mockReset();
@@ -222,12 +254,78 @@ describe("catalog workspace", () => {
     createResourceMock.mockReset();
   });
 
+  it("renders the selected user relationship workspace from the protected aggregate", async () => {
+    queueAuthenticatedWorkspace();
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByRole("heading", { name: /user relationship workspace/i })).toBeInTheDocument();
+    const relationshipWorkspace = screen.getByRole("region", { name: /user relationship workspace/i });
+    expect(
+      (within(relationshipWorkspace).getByRole("option", { name: "Ada Lovelace" }) as HTMLOptionElement)
+        .selected,
+    ).toBe(true);
+    expect(screen.getByText(/select one catalog user to read memberships, scoped roles, and attached resources/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Team Maintainer" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Primary Postgres" })).toBeInTheDocument();
+    expect(screen.getByText(/database · environment · production · team · platform engineering/i)).toBeInTheDocument();
+  });
+
+  it("shows empty relationship states when the selected user has no memberships, roles, or resources", async () => {
+    queueAuthenticatedWorkspace(baseWorkspace, {
+      catalog_user: baseWorkspace.users[0],
+      memberships: [],
+      assignments: [],
+      resources: [],
+    });
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByText(/does not belong to any teams yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not have any direct scoped roles yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/does not have any attached resource relationships yet/i)).toBeInTheDocument();
+  });
+
+  it("surfaces selected-user relationship not-found failures inline", async () => {
+    queueAuthenticatedWorkspace();
+    readCatalogUserRelationshipMock.mockReset();
+    readCatalogUserRelationshipMock.mockRejectedValueOnce(
+      new AuthApiRequestError(404, "Catalog user was not found.", "catalog_user_not_found"),
+    );
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByText(/unable to load selected user relationships/i)).toBeInTheDocument();
+    expect(screen.getByText("Catalog user was not found.")).toBeInTheDocument();
+    expect(screen.getByText("Failure code: catalog_user_not_found")).toBeInTheDocument();
+  });
+
+  it("redirects to sign-in if the selected-user relationship read detects auth expiry", async () => {
+    queueAuthenticatedWorkspace();
+    readCatalogUserRelationshipMock.mockReset();
+    readCatalogUserRelationshipMock.mockRejectedValueOnce(
+      new AuthApiRequestError(401, "Authentication required.", "auth_unauthenticated"),
+    );
+
+    render(<OperatorPage />);
+
+    await waitFor(() => {
+      expect(replaceMock).toHaveBeenCalledWith("/login?reason=unauthenticated");
+    });
+
+    expect(await screen.findByText(/authentication required/i)).toBeInTheDocument();
+  });
+
   it("shows the loading state before catalog data resolves", async () => {
     readProtectedWhoAmIMock.mockResolvedValueOnce({
       user: { id: 1, email: "admin@passark.local", is_active: true },
       session_id: 12,
     });
     readCatalogWorkspaceMock.mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    readCatalogUserRelationshipMock.mockImplementationOnce(
       () => new Promise(() => undefined),
     );
 
@@ -389,7 +487,10 @@ describe("catalog workspace", () => {
       await screen.findByText(/catalog user ada byron updated successfully/i),
     ).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /edit ada byron/i })).toBeInTheDocument();
-    expect(await screen.findByText(/principal analyst · inactive/i)).toBeInTheDocument();
+    const updatedUserButton = await screen.findByRole("button", { name: /edit ada byron/i });
+    const updatedUserCard = updatedUserButton.closest("li");
+    expect(updatedUserCard).not.toBeNull();
+    expect(within(updatedUserCard as HTMLElement).getByText(/principal analyst · inactive/i)).toBeInTheDocument();
   });
 
   it("creates apps, projects, environments, and typed resources through the live workspace", async () => {
