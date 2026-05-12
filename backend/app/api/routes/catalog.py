@@ -400,6 +400,34 @@ class ResourceMutationResponse(BaseModel):
     resource: ResourceResponse
 
 
+class CatalogUserRelationshipTeamMembershipResponse(BaseModel):
+    membership: TeamMembershipResponse
+    team: TeamResponse
+
+
+class CatalogUserRelationshipAssignmentResponse(BaseModel):
+    assignment: DirectRoleAssignmentResponse
+    scoped_role: ScopedRoleResponse
+
+
+class CatalogUserRelationshipResourceResponse(BaseModel):
+    resource: ResourceResponse
+    app: AppResponse | None = None
+    project: ProjectResponse | None = None
+    environment: EnvironmentResponse | None = None
+
+
+class CatalogUserRelationshipResponse(BaseModel):
+    catalog_user: CatalogUserResponse
+    memberships: list[CatalogUserRelationshipTeamMembershipResponse]
+    assignments: list[CatalogUserRelationshipAssignmentResponse]
+    resources: list[CatalogUserRelationshipResourceResponse]
+
+
+class CatalogUserRelationshipEnvelopeResponse(BaseModel):
+    item: CatalogUserRelationshipResponse
+
+
 def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -564,6 +592,41 @@ def _serialize_resource(resource: Resource) -> ResourceResponse:
             "created_at": resource.created_at.isoformat(),
             "updated_at": resource.updated_at.isoformat(),
         }
+    )
+
+
+def _serialize_catalog_user_relationship_membership(
+    membership: TeamMembership,
+    team: Team,
+) -> CatalogUserRelationshipTeamMembershipResponse:
+    return CatalogUserRelationshipTeamMembershipResponse(
+        membership=_serialize_team_membership(membership),
+        team=_serialize_team(team),
+    )
+
+
+def _serialize_catalog_user_relationship_assignment(
+    assignment: DirectRoleAssignment,
+    scoped_role: ScopedRole,
+) -> CatalogUserRelationshipAssignmentResponse:
+    return CatalogUserRelationshipAssignmentResponse(
+        assignment=_serialize_direct_role_assignment(assignment),
+        scoped_role=_serialize_scoped_role(scoped_role),
+    )
+
+
+def _serialize_catalog_user_relationship_resource(
+    resource: Resource,
+    *,
+    app: App | None,
+    project: Project | None,
+    environment: Environment | None,
+) -> CatalogUserRelationshipResourceResponse:
+    return CatalogUserRelationshipResourceResponse(
+        resource=_serialize_resource(resource),
+        app=_serialize_app(app) if app is not None else None,
+        project=_serialize_project(project) if project is not None else None,
+        environment=_serialize_environment(environment) if environment is not None else None,
     )
 
 
@@ -736,6 +799,60 @@ def _validate_resource_scope(
     raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=RESOURCE_SCOPE_MISMATCH_ERROR)
 
 
+def _resolve_catalog_user_relationship_resources(
+    *,
+    organization_id: str,
+    team_ids: set[str],
+    db: OrmSession,
+) -> list[CatalogUserRelationshipResourceResponse]:
+    visible_scope_ids = {organization_id, *team_ids}
+    resources = db.scalars(
+        select(Resource)
+        .where(Resource.organization_id == organization_id)
+        .where(
+            ((Resource.scope_type == DEFAULT_SCOPE_TYPE) & (Resource.scope_id == organization_id))
+            | ((Resource.scope_type == "team") & (Resource.scope_id.in_(visible_scope_ids)))
+        )
+        .order_by(
+            Resource.resource_type.asc(),
+            Resource.name.asc(),
+            Resource.id.asc(),
+        )
+    ).all()
+
+    app_ids = {resource.app_id for resource in resources if resource.app_id is not None}
+    project_ids = {resource.project_id for resource in resources if resource.project_id is not None}
+    environment_ids = {resource.environment_id for resource in resources if resource.environment_id is not None}
+
+    apps_by_id = {
+        app.id: app
+        for app in db.scalars(select(App).where(App.id.in_(app_ids))).all()
+    } if app_ids else {}
+    projects_by_id = {
+        project.id: project
+        for project in db.scalars(select(Project).where(Project.id.in_(project_ids))).all()
+    } if project_ids else {}
+    environments_by_id = {
+        environment.id: environment
+        for environment in db.scalars(select(Environment).where(Environment.id.in_(environment_ids))).all()
+    } if environment_ids else {}
+
+    items: list[CatalogUserRelationshipResourceResponse] = []
+    for resource in resources:
+        app = apps_by_id.get(resource.app_id) if resource.app_id is not None else None
+        project = projects_by_id.get(resource.project_id) if resource.project_id is not None else None
+        environment = environments_by_id.get(resource.environment_id) if resource.environment_id is not None else None
+        items.append(
+            _serialize_catalog_user_relationship_resource(
+                resource,
+                app=app,
+                project=project,
+                environment=environment,
+            )
+        )
+    return items
+
+
 @router.get("/organization", response_model=OrganizationResponse)
 def read_organization(
     current_user: User = Depends(get_current_user),
@@ -847,6 +964,61 @@ def update_catalog_user(
     db.commit()
     db.refresh(catalog_user)
     return CatalogUserMutationResponse(catalog_user=_serialize_catalog_user(catalog_user))
+
+
+@router.get("/users/{catalog_user_id}/relationship", response_model=CatalogUserRelationshipEnvelopeResponse)
+def read_catalog_user_relationship(
+    catalog_user_id: str,
+    current_user: User = Depends(get_current_user),
+    db: OrmSession = Depends(get_db),
+) -> CatalogUserRelationshipEnvelopeResponse:
+    del current_user
+    organization = _get_or_create_organization_root(db)
+    catalog_user = _get_catalog_user_or_404(catalog_user_id, organization.id, db)
+
+    membership_rows = db.execute(
+        select(TeamMembership, Team)
+        .join(Team, Team.id == TeamMembership.team_id)
+        .where(TeamMembership.catalog_user_id == catalog_user.id)
+        .where(Team.organization_id == organization.id)
+        .order_by(Team.name.asc(), TeamMembership.id.asc())
+    ).all()
+    memberships = [
+        _serialize_catalog_user_relationship_membership(membership, team)
+        for membership, team in membership_rows
+    ]
+    team_ids = {team.id for _, team in membership_rows}
+
+    assignment_rows = db.execute(
+        select(DirectRoleAssignment, ScopedRole)
+        .join(ScopedRole, ScopedRole.id == DirectRoleAssignment.scoped_role_id)
+        .where(DirectRoleAssignment.catalog_user_id == catalog_user.id)
+        .where(ScopedRole.organization_id == organization.id)
+        .order_by(
+            ScopedRole.scope_type.asc(),
+            ScopedRole.name.asc(),
+            DirectRoleAssignment.id.asc(),
+        )
+    ).all()
+    assignments = [
+        _serialize_catalog_user_relationship_assignment(assignment, scoped_role)
+        for assignment, scoped_role in assignment_rows
+    ]
+
+    resources = _resolve_catalog_user_relationship_resources(
+        organization_id=organization.id,
+        team_ids=team_ids,
+        db=db,
+    )
+
+    return CatalogUserRelationshipEnvelopeResponse(
+        item=CatalogUserRelationshipResponse(
+            catalog_user=_serialize_catalog_user(catalog_user),
+            memberships=memberships,
+            assignments=assignments,
+            resources=resources,
+        )
+    )
 
 
 @router.get("/teams", response_model=TeamListResponse)

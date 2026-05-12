@@ -116,6 +116,34 @@ export type Resource = {
   updated_at: string;
 };
 
+export type CatalogUserRelationshipMembership = {
+  membership: TeamMembership;
+  team: Team;
+};
+
+export type CatalogUserRelationshipAssignment = {
+  assignment: DirectRoleAssignment;
+  scoped_role: ScopedRole;
+};
+
+export type CatalogUserRelationshipResource = {
+  resource: Resource;
+  app: App | null;
+  project: Project | null;
+  environment: Environment | null;
+};
+
+export type CatalogUserRelationship = {
+  catalog_user: CatalogUser;
+  memberships: CatalogUserRelationshipMembership[];
+  assignments: CatalogUserRelationshipAssignment[];
+  resources: CatalogUserRelationshipResource[];
+};
+
+export type CatalogUserRelationshipEnvelope = {
+  item: CatalogUserRelationship;
+};
+
 export type OrganizationUpdateResponse = {
   organization: Organization;
   audit_event_id: number;
@@ -520,6 +548,19 @@ export async function updateCatalogUser(
       body: JSON.stringify(payload),
     },
   );
+}
+
+export async function readCatalogUserRelationship(
+  catalogUserId: string,
+): Promise<CatalogUserRelationship> {
+  const response = await catalogJsonFetch<CatalogUserRelationshipEnvelope>(
+    `/catalog/users/${catalogUserId}/relationship`,
+    {
+      method: "GET",
+      cache: "no-store",
+    },
+  );
+  return response.item;
 }
 
 export async function listTeams(): Promise<Team[]> {

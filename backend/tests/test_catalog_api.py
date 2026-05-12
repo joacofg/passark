@@ -36,6 +36,15 @@ def test_catalog_endpoints_require_authentication(client):
         }
     }
 
+    response = client.get("/api/v1/catalog/users/cu_fixture/relationship")
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": {
+            "code": "auth_unauthenticated",
+            "message": "Authentication required.",
+        }
+    }
+
     response = client.get("/api/v1/catalog/teams")
     assert response.status_code == 401
     assert response.json() == {
@@ -354,6 +363,250 @@ def test_update_catalog_user_rejects_missing_record(client):
             "is_active": True,
         },
     )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "detail": {
+            "code": "catalog_user_not_found",
+            "message": "Catalog user was not found.",
+        }
+    }
+
+
+def test_read_catalog_user_relationship_returns_memberships_assignments_and_scoped_resources(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    catalog_user = CatalogUser(
+        id="cu_fixture",
+        organization_id=organization.id,
+        email="operator@example.com",
+        full_name="Operator User",
+        job_title="Ops Lead",
+        is_active=True,
+    )
+    other_user = CatalogUser(
+        id="cu_other",
+        organization_id=organization.id,
+        email="other@example.com",
+        full_name="Other User",
+        job_title="Observer",
+        is_active=True,
+    )
+    team = Team(
+        id="team_fixture",
+        organization_id=organization.id,
+        name="Security",
+        description="Handles review",
+    )
+    other_team = Team(
+        id="team_other",
+        organization_id=organization.id,
+        name="Platform",
+        description="Owns shared services",
+    )
+    membership = TeamMembership(
+        id="tm_fixture",
+        team_id=team.id,
+        catalog_user_id=catalog_user.id,
+    )
+    scoped_role = ScopedRole(
+        id="role_fixture",
+        organization_id=organization.id,
+        name="Team Maintainer",
+        description="Maintains team resources",
+        scope_type="team",
+        scope_id=team.id,
+    )
+    assignment = DirectRoleAssignment(
+        id="dra_fixture",
+        scoped_role_id=scoped_role.id,
+        catalog_user_id=catalog_user.id,
+    )
+    app = App(
+        id="app_fixture",
+        organization_id=organization.id,
+        name="Customer Portal",
+        description="Primary frontend",
+    )
+    project = Project(
+        id="proj_fixture",
+        organization_id=organization.id,
+        app_id=app.id,
+        name="Identity API",
+        description="Backend service",
+    )
+    environment = Environment(
+        id="env_fixture",
+        organization_id=organization.id,
+        project_id=project.id,
+        name="Production",
+        description="Live env",
+    )
+    org_resource = Resource(
+        id="res_org",
+        organization_id=organization.id,
+        app_id=app.id,
+        project_id=project.id,
+        environment_id=environment.id,
+        name="Global Queue",
+        resource_type="queue",
+        container_type="environment",
+        container_id=environment.id,
+        scope_type="organization",
+        scope_id=organization.id,
+        description="Shared ingestion queue",
+        metadata_json={"tier": "shared"},
+    )
+    team_resource = Resource(
+        id="res_team",
+        organization_id=organization.id,
+        app_id=app.id,
+        project_id=project.id,
+        environment_id=environment.id,
+        name="Security DB",
+        resource_type="database",
+        container_type="environment",
+        container_id=environment.id,
+        scope_type="team",
+        scope_id=team.id,
+        description="Team-scoped datastore",
+        metadata_json={"engine": "postgres"},
+    )
+    unrelated_resource = Resource(
+        id="res_other_team",
+        organization_id=organization.id,
+        app_id=app.id,
+        project_id=project.id,
+        environment_id=environment.id,
+        name="Platform Bucket",
+        resource_type="bucket",
+        container_type="environment",
+        container_id=environment.id,
+        scope_type="team",
+        scope_id=other_team.id,
+        description="Other team asset",
+        metadata_json={"tier": "private"},
+    )
+    db_session.add_all(
+        [
+            organization,
+            catalog_user,
+            other_user,
+            team,
+            other_team,
+            membership,
+            scoped_role,
+            assignment,
+            app,
+            project,
+            environment,
+            org_resource,
+            team_resource,
+            unrelated_resource,
+        ]
+    )
+    db_session.commit()
+
+    response = client.get("/api/v1/catalog/users/cu_fixture/relationship")
+
+    assert response.status_code == 200
+    body = response.json()["item"]
+    assert body["catalog_user"]["id"] == "cu_fixture"
+    assert body["memberships"] == [
+        {
+            "membership": {
+                "id": "tm_fixture",
+                "team_id": "team_fixture",
+                "catalog_user_id": "cu_fixture",
+                "created_at": db_session.query(TeamMembership).filter_by(id="tm_fixture").one().created_at.isoformat(),
+            },
+            "team": {
+                "id": "team_fixture",
+                "organization_id": "org_fixture",
+                "name": "Security",
+                "description": "Handles review",
+                "created_at": db_session.query(Team).filter_by(id="team_fixture").one().created_at.isoformat(),
+                "updated_at": db_session.query(Team).filter_by(id="team_fixture").one().updated_at.isoformat(),
+            },
+        }
+    ]
+    assert body["assignments"] == [
+        {
+            "assignment": {
+                "id": "dra_fixture",
+                "scoped_role_id": "role_fixture",
+                "catalog_user_id": "cu_fixture",
+                "created_at": db_session.query(DirectRoleAssignment).filter_by(id="dra_fixture").one().created_at.isoformat(),
+            },
+            "scoped_role": {
+                "id": "role_fixture",
+                "organization_id": "org_fixture",
+                "name": "Team Maintainer",
+                "description": "Maintains team resources",
+                "scope_type": "team",
+                "scope_id": "team_fixture",
+                "created_at": db_session.query(ScopedRole).filter_by(id="role_fixture").one().created_at.isoformat(),
+                "updated_at": db_session.query(ScopedRole).filter_by(id="role_fixture").one().updated_at.isoformat(),
+            },
+        }
+    ]
+    assert [item["resource"]["id"] for item in body["resources"]] == ["res_team", "res_org"]
+    assert body["resources"][0]["resource"]["scope_id"] == "team_fixture"
+    assert body["resources"][0]["app"]["id"] == "app_fixture"
+    assert body["resources"][0]["project"]["id"] == "proj_fixture"
+    assert body["resources"][0]["environment"]["id"] == "env_fixture"
+    assert body["resources"][1]["resource"]["scope_id"] == "org_fixture"
+    assert all(item["resource"]["id"] != "res_other_team" for item in body["resources"])
+
+
+def test_read_catalog_user_relationship_returns_stable_empty_lists(client, db_session):
+    login_as_admin(client)
+    organization = Organization(
+        id="org_fixture",
+        singleton_key="organization_singleton",
+        slug="passark",
+        display_name="PassArk",
+    )
+    catalog_user = CatalogUser(
+        id="cu_fixture",
+        organization_id=organization.id,
+        email="operator@example.com",
+        full_name="Operator User",
+        job_title="Ops Lead",
+        is_active=True,
+    )
+    db_session.add_all([organization, catalog_user])
+    db_session.commit()
+
+    response = client.get("/api/v1/catalog/users/cu_fixture/relationship")
+
+    assert response.status_code == 200
+    assert response.json()["item"] == {
+        "catalog_user": {
+            "id": "cu_fixture",
+            "organization_id": "org_fixture",
+            "email": "operator@example.com",
+            "full_name": "Operator User",
+            "job_title": "Ops Lead",
+            "is_active": True,
+            "created_at": db_session.query(CatalogUser).filter_by(id="cu_fixture").one().created_at.isoformat(),
+            "updated_at": db_session.query(CatalogUser).filter_by(id="cu_fixture").one().updated_at.isoformat(),
+        },
+        "memberships": [],
+        "assignments": [],
+        "resources": [],
+    }
+
+
+def test_read_catalog_user_relationship_rejects_missing_user_with_stable_not_found_code(client):
+    login_as_admin(client)
+
+    response = client.get("/api/v1/catalog/users/cu_missing/relationship")
 
     assert response.status_code == 404
     assert response.json() == {
