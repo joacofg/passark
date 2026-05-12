@@ -839,13 +839,13 @@ describe("catalog workspace", () => {
     ).toBeInTheDocument();
   });
 
-  it("surfaces resource conflict failures in-place", async () => {
+  it("surfaces audited resource failures in-place without losing the machine-readable code", async () => {
     queueAuthenticatedWorkspace();
     createResourceMock.mockRejectedValueOnce(
       new AuthApiRequestError(
-        409,
-        "Resource already exists for this container and scope.",
-        "resource_conflict",
+        503,
+        "Audit logging is required for this operation.",
+        "audit_unavailable",
       ),
     );
 
@@ -879,8 +879,8 @@ describe("catalog workspace", () => {
       expect(createResourceMock).toHaveBeenCalledTimes(1);
     });
 
-    expect(await screen.findByText("Resource already exists for this container and scope.")).toBeInTheDocument();
-    expect(await screen.findByText("Failure code: resource_conflict")).toBeInTheDocument();
+    expect(await screen.findByText("Audit logging is required for this operation.")).toBeInTheDocument();
+    expect(await screen.findByText("Failure code: audit_unavailable")).toBeInTheDocument();
   });
 
   it("surfaces project-not-found failures in-place", async () => {

@@ -410,16 +410,24 @@ export function decodeCatalogError(error: unknown): DecodedCatalogError {
       };
     }
 
-    if (
-      error.status === 503 &&
-      error.code === "organization_update_audit_unavailable"
-    ) {
-      return {
-        message: error.message,
-        code: "organization_update_audit_unavailable",
-        kind: "server",
-        status: error.status,
-      };
+    if (error.status === 503) {
+      if (error.code === "organization_update_audit_unavailable") {
+        return {
+          message: error.message,
+          code: "organization_update_audit_unavailable",
+          kind: "server",
+          status: error.status,
+        };
+      }
+
+      if (error.code === "audit_unavailable") {
+        return {
+          message: error.message,
+          code: "audit_unavailable",
+          kind: "server",
+          status: error.status,
+        };
+      }
     }
 
     if (error.status === 409 && conflictCodes.includes(error.code as CatalogApiErrorCode)) {

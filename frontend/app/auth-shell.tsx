@@ -2236,7 +2236,7 @@ export function OperatorShell() {
       const teamName = resolveTeamName(response.membership.team_id, workspaceData?.teams ?? []);
       setMembershipNotice({
         tone: "success",
-        message: `Team membership created for ${userName} in ${teamName}.`,
+        message: `Team membership created for ${userName} in ${teamName}. Audit event #${response.audit_event_id} captured with correlation ${response.correlation_id}.`,
       });
       setMembershipForm(emptyMembershipForm());
       await loadWorkspace();
@@ -2474,7 +2474,7 @@ export function OperatorShell() {
               <h2>Failure diagnosis</h2>
               <p>
                 Auth expiry redirects to sign-in, while validation, conflict,
-                not-found, scope mismatch, and audit-write failures remain visible
+                not-found, scope mismatch, audit-unavailable, and audit-write failures remain visible
                 with stable backend failure codes for operator troubleshooting.
               </p>
             </article>

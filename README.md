@@ -131,6 +131,13 @@ Use `make quality-gates` to catch host-side regressions in tests or lint first. 
 3. a logged-out or invalidated session is denied with the same machine-readable auth contract while still persisting a denial audit row, and
 4. PostgreSQL contains the matching success and denial `audit_events` rows keyed by correlation/request identifiers so missing persistence cannot look like success.
 
+`bash scripts/verify-s05.sh` extends the compose-backed proof into the catalog mutation seam by proving that:
+
+1. authenticated team creation returns an audited envelope with `audit_event_id` and `correlation_id`,
+2. authenticated team-membership creation also returns the audited envelope shape,
+3. PostgreSQL contains the matching durable `audit_events` rows for both catalog mutation operations, and
+4. Docker absence still reports as infrastructure gating rather than a product regression.
+
 `bash scripts/verify-milestone.sh` is the canonical milestone-level wrapper. It fails fast when Docker is unavailable so infrastructure gating is reported distinctly, prints a compose service snapshot, then runs the tracked S02 and S03 proofs in sequence without reimplementing their checks.
 
 The milestone wrapper proves the real compose-backed auth and audit flow. It does **not** replace the faster host-side `quality-gates` checks, and `quality-gates` does **not** claim Docker, compose health, cookie-session integration, or PostgreSQL audit persistence proof.

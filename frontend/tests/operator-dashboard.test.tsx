@@ -236,7 +236,7 @@ describe("OperatorPage", () => {
       screen.getByText(/application → project → environment → typed resource hierarchy/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/validation, conflict, not-found, scope mismatch, and audit-write failures remain visible/i),
+      screen.getByText(/validation, conflict, not-found, scope mismatch, audit-unavailable, and audit-write failures remain visible/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/session token/i)).not.toBeInTheDocument();
   });
