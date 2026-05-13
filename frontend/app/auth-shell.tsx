@@ -2412,7 +2412,7 @@ export function OperatorShell() {
         organization root, people and team relationships, and the application → project →
         environment → typed resource hierarchy from the protected catalog API.
         Auth expiry redirects back to sign-in, while validation, conflict,
-        not-found, and scope mismatch failures stay visible here for operator diagnosis.
+        not-found, scope mismatch, and audit-unavailable failures stay visible here for operator diagnosis.
       </p>
 
       {identityState.status === "loading" ? (

@@ -493,6 +493,115 @@ describe("catalog workspace", () => {
     expect(within(updatedUserCard as HTMLElement).getByText(/principal analyst · inactive/i)).toBeInTheDocument();
   });
 
+  it("creates audited teams and memberships with visible audit evidence in the live workspace", async () => {
+    queueAuthenticatedWorkspace({
+      ...baseWorkspace,
+      memberships: [],
+    });
+    createTeamMock.mockResolvedValueOnce({
+      team: {
+        id: "team_s05",
+        organization_id: "org_123",
+        name: "S05 Team",
+        description: "Audited team",
+        created_at: "2024-01-02T00:00:00Z",
+        updated_at: "2024-01-02T00:00:00Z",
+      },
+      audit_event_id: 41,
+      correlation_id: "verify-s05-team",
+    });
+    readCatalogWorkspaceMock.mockResolvedValueOnce({
+      ...baseWorkspace,
+      teams: [
+        ...baseWorkspace.teams,
+        {
+          id: "team_s05",
+          organization_id: "org_123",
+          name: "S05 Team",
+          description: "Audited team",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      memberships: [],
+    });
+    createMembershipMock.mockResolvedValueOnce({
+      membership: {
+        id: "tm_s05",
+        team_id: "team_s05",
+        catalog_user_id: "cu_ada",
+        created_at: "2024-01-02T00:00:00Z",
+      },
+      audit_event_id: 42,
+      correlation_id: "verify-s05-membership",
+    });
+    readCatalogWorkspaceMock.mockResolvedValueOnce({
+      ...baseWorkspace,
+      teams: [
+        ...baseWorkspace.teams,
+        {
+          id: "team_s05",
+          organization_id: "org_123",
+          name: "S05 Team",
+          description: "Audited team",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+      memberships: [
+        {
+          id: "tm_s05",
+          team_id: "team_s05",
+          catalog_user_id: "cu_ada",
+          created_at: "2024-01-02T00:00:00Z",
+        },
+      ],
+    });
+
+    render(<OperatorPage />);
+
+    expect(await screen.findByRole("heading", { name: "Platform Engineering" })).toBeInTheDocument();
+
+    const teamsWorkspace = screen.getByRole("region", { name: /teams workspace/i });
+    fireEvent.change(within(teamsWorkspace).getByLabelText("Team name"), {
+      target: { value: "S05 Team" },
+    });
+    fireEvent.change(within(teamsWorkspace).getByLabelText("Team description"), {
+      target: { value: "Audited team" },
+    });
+    fireEvent.click(within(teamsWorkspace).getByRole("button", { name: /^create team$/i }));
+
+    await waitFor(() => {
+      expect(createTeamMock).toHaveBeenCalledWith({
+        name: "S05 Team",
+        description: "Audited team",
+      });
+    });
+
+    expect(await screen.findByText(/team s05 team created successfully\./i)).toBeInTheDocument();
+    expect(await screen.findByText(/audit event #41 captured with correlation verify-s05-team\./i)).toBeInTheDocument();
+
+    const membershipsWorkspace = screen.getByRole("region", { name: /memberships workspace/i });
+    fireEvent.change(within(membershipsWorkspace).getByLabelText("Team"), {
+      target: { value: "team_s05" },
+    });
+    fireEvent.change(within(membershipsWorkspace).getByLabelText("Catalog user"), {
+      target: { value: "cu_ada" },
+    });
+    fireEvent.click(within(membershipsWorkspace).getByRole("button", { name: /^create membership$/i }));
+
+    await waitFor(() => {
+      expect(createMembershipMock).toHaveBeenCalledWith({
+        team_id: "team_s05",
+        catalog_user_id: "cu_ada",
+      });
+    });
+
+    expect(
+      await screen.findByText(/team membership created for ada lovelace in s05 team\. audit event #42 captured with correlation verify-s05-membership\./i),
+    ).toBeInTheDocument();
+  });
+
   it("creates apps, projects, environments, and typed resources through the live workspace", async () => {
     queueAuthenticatedWorkspace({
       ...baseWorkspace,
@@ -632,6 +741,8 @@ describe("catalog workspace", () => {
         created_at: "2024-01-02T00:00:00Z",
         updated_at: "2024-01-02T00:00:00Z",
       },
+      audit_event_id: 43,
+      correlation_id: "resource-corr-001",
     });
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
@@ -794,7 +905,8 @@ describe("catalog workspace", () => {
         },
       });
     });
-    expect(await screen.findByText(/resource payments queue created successfully/i)).toBeInTheDocument();
+    expect(await screen.findByText(/resource payments queue created successfully\./i)).toBeInTheDocument();
+    expect(await screen.findByText(/audit event #43 captured with correlation resource-corr-001\./i)).toBeInTheDocument();
     const createdResourceHeading = await screen.findByRole("heading", { name: "Payments Queue" });
     const createdResourceCard = createdResourceHeading.closest("li");
     expect(createdResourceCard).not.toBeNull();

@@ -204,6 +204,7 @@ export type CatalogApiErrorCode =
   | "catalog_user_conflict"
   | "catalog_user_not_found"
   | "organization_update_audit_unavailable"
+  | "audit_unavailable"
   | "validation_error"
   | "team_conflict"
   | "team_not_found"
