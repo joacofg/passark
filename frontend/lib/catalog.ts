@@ -156,6 +156,8 @@ export type CatalogUserMutationResponse = {
 
 export type TeamMutationResponse = {
   team: Team;
+  audit_event_id: number;
+  correlation_id: string;
 };
 
 export type ScopedRoleMutationResponse = {

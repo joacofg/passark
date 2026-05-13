@@ -2177,7 +2177,7 @@ export function OperatorShell() {
       const response = await createTeam(payload);
       setTeamNotice({
         tone: "success",
-        message: `Team ${response.team.name} created successfully.`,
+        message: `Team ${response.team.name} created successfully. Audit event #${response.audit_event_id} captured with correlation ${response.correlation_id}.`,
       });
       setTeamForm(emptyTeamForm());
       await loadWorkspace();
@@ -2387,7 +2387,7 @@ export function OperatorShell() {
       const response = await createResource(payload);
       setResourceNotice({
         tone: "success",
-        message: `Resource ${response.resource.name} created successfully.`,
+        message: `Resource ${response.resource.name} created successfully. Audit event #${response.audit_event_id} captured with correlation ${response.correlation_id}.`,
       });
       setResourceForm(emptyResourceForm(workspaceData?.organization.id ?? ""));
       await loadWorkspace();
