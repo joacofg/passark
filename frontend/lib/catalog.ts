@@ -154,11 +154,14 @@ export type CatalogUserMutationResponse = {
   catalog_user: CatalogUser;
 };
 
-export type TeamMutationResponse = {
-  team: Team;
+export type AuditedMutationMetadata = {
   audit_event_id: number;
   correlation_id: string;
 };
+
+export type TeamMutationResponse = {
+  team: Team;
+} & AuditedMutationMetadata;
 
 export type ScopedRoleMutationResponse = {
   scoped_role: ScopedRole;
@@ -166,7 +169,7 @@ export type ScopedRoleMutationResponse = {
 
 export type TeamMembershipMutationResponse = {
   membership: TeamMembership;
-};
+} & AuditedMutationMetadata;
 
 export type DirectRoleAssignmentMutationResponse = {
   assignment: DirectRoleAssignment;
@@ -186,7 +189,7 @@ export type EnvironmentMutationResponse = {
 
 export type ResourceMutationResponse = {
   resource: Resource;
-};
+} & AuditedMutationMetadata;
 
 export type CatalogWorkspaceData = {
   organization: Organization;

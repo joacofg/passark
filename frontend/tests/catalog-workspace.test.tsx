@@ -3,6 +3,11 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 
 import OperatorPage from "../app/operator/page";
 import { AuthApiRequestError } from "../lib/auth";
+import type {
+  ResourceMutationResponse,
+  TeamMembershipMutationResponse,
+  TeamMutationResponse,
+} from "../lib/catalog";
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
@@ -218,6 +223,22 @@ const baseRelationship = {
     },
   ],
 };
+
+function auditedTeamResponse(response: TeamMutationResponse): TeamMutationResponse {
+  return response;
+}
+
+function auditedMembershipResponse(
+  response: TeamMembershipMutationResponse,
+): TeamMembershipMutationResponse {
+  return response;
+}
+
+function auditedResourceResponse(
+  response: ResourceMutationResponse,
+): ResourceMutationResponse {
+  return response;
+}
 
 function queueAuthenticatedWorkspace(
   workspace: typeof baseWorkspace = baseWorkspace,
@@ -498,18 +519,20 @@ describe("catalog workspace", () => {
       ...baseWorkspace,
       memberships: [],
     });
-    createTeamMock.mockResolvedValueOnce({
-      team: {
-        id: "team_s05",
-        organization_id: "org_123",
-        name: "S05 Team",
-        description: "Audited team",
-        created_at: "2024-01-02T00:00:00Z",
-        updated_at: "2024-01-02T00:00:00Z",
-      },
-      audit_event_id: 41,
-      correlation_id: "verify-s05-team",
-    });
+    createTeamMock.mockResolvedValueOnce(
+      auditedTeamResponse({
+        team: {
+          id: "team_s05",
+          organization_id: "org_123",
+          name: "S05 Team",
+          description: "Audited team",
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
+        },
+        audit_event_id: 41,
+        correlation_id: "verify-s05-team",
+      }),
+    );
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
       teams: [
@@ -525,16 +548,18 @@ describe("catalog workspace", () => {
       ],
       memberships: [],
     });
-    createMembershipMock.mockResolvedValueOnce({
-      membership: {
-        id: "tm_s05",
-        team_id: "team_s05",
-        catalog_user_id: "cu_ada",
-        created_at: "2024-01-02T00:00:00Z",
-      },
-      audit_event_id: 42,
-      correlation_id: "verify-s05-membership",
-    });
+    createMembershipMock.mockResolvedValueOnce(
+      auditedMembershipResponse({
+        membership: {
+          id: "tm_s05",
+          team_id: "team_s05",
+          catalog_user_id: "cu_ada",
+          created_at: "2024-01-02T00:00:00Z",
+        },
+        audit_event_id: 42,
+        correlation_id: "verify-s05-membership",
+      }),
+    );
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
       teams: [
@@ -720,30 +745,32 @@ describe("catalog workspace", () => {
       ],
       resources: [],
     });
-    createResourceMock.mockResolvedValueOnce({
-      resource: {
-        id: "res_queue",
-        organization_id: "org_123",
-        app_id: "app_billing",
-        project_id: "proj_payments",
-        environment_id: "env_staging",
-        name: "Payments Queue",
-        resource_type: "queue",
-        container_type: "environment",
-        container_id: "env_staging",
-        scope_type: "team",
-        scope_id: "team_platform",
-        description: "Async payment processing",
-        metadata: {
-          owner: "platform",
-          rotation: "manual",
+    createResourceMock.mockResolvedValueOnce(
+      auditedResourceResponse({
+        resource: {
+          id: "res_queue",
+          organization_id: "org_123",
+          app_id: "app_billing",
+          project_id: "proj_payments",
+          environment_id: "env_staging",
+          name: "Payments Queue",
+          resource_type: "queue",
+          container_type: "environment",
+          container_id: "env_staging",
+          scope_type: "team",
+          scope_id: "team_platform",
+          description: "Async payment processing",
+          metadata: {
+            owner: "platform",
+            rotation: "manual",
+          },
+          created_at: "2024-01-02T00:00:00Z",
+          updated_at: "2024-01-02T00:00:00Z",
         },
-        created_at: "2024-01-02T00:00:00Z",
-        updated_at: "2024-01-02T00:00:00Z",
-      },
-      audit_event_id: 43,
-      correlation_id: "resource-corr-001",
-    });
+        audit_event_id: 43,
+        correlation_id: "resource-corr-001",
+      }),
+    );
     readCatalogWorkspaceMock.mockResolvedValueOnce({
       ...baseWorkspace,
       apps: [
