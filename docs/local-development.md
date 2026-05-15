@@ -140,16 +140,19 @@ docker compose down -v
 
 `make quality-gates` proves the tracked host-side tests and lint still pass. It does **not** prove Docker availability, compose health, backend/frontend session integration, or persisted PostgreSQL audit evidence.
 
-`make verify-milestone` is the acceptance proof for the assembled local environment. It wraps `verify-s02` and `verify-s03` so operators can run one truthful command for the final auth-plus-audit contract without blurring infrastructure failures with application regressions.
+`make verify-s06` is the acceptance proof for the assembled M002 local environment. It exercises the real cookie-backed auth seam, assembles the catalog graph end to end, reads the protected relationship aggregate back, and inspects matching PostgreSQL `audit_events` rows without blurring infrastructure failures with application regressions.
 
-A healthy milestone verification run proves all of the following:
+A healthy `verify-s06` run proves all of the following:
 
 1. Compose renders and the three services are healthy.
-2. `/api/v1/health` returns the expected backend payload.
-3. Anonymous access to `POST /api/v1/protected/vault-access-probe` returns the stable 401 auth contract.
-4. Login succeeds with the configured bootstrap operator credentials.
-5. Authenticated access to `POST /api/v1/protected/vault-access-probe` returns the expected operation/status/audit identifiers.
-6. Logging out invalidates the session and the same sensitive route fails closed with the stable machine-readable denial code.
-7. PostgreSQL contains the matching `audit_events` rows for both the allowed and denied attempts, including operation, outcome, reason code, and correlation/request identifiers.
+2. Login succeeds with the configured bootstrap operator credentials.
+3. A dedicated catalog user can be created for verification.
+4. Audited team and membership mutations succeed with stable `audit_event_id`/`correlation_id` envelopes.
+5. A direct scoped-role assignment and environment-scoped hierarchy can be created successfully.
+6. A team-scoped audited resource becomes visible through `GET /api/v1/catalog/users/{id}/relationship` only after the matching membership exists.
+7. PostgreSQL contains the matching `audit_events` rows for the team, membership, and resource mutations, including operation, outcome, reason code, and correlation/request identifiers.
+
+`make verify-milestone` remains the wrapper command when you want the higher-level milestone runner instead of the direct S06 verifier.
 
 This slice does **not** yet claim browser CSRF defenses, rate limiting, or broader security hardening beyond the audited sensitive-route contract above.
+oader security hardening beyond the audited sensitive-route contract above.

@@ -138,9 +138,16 @@ Use `make quality-gates` to catch host-side regressions in tests or lint first. 
 3. PostgreSQL contains the matching durable `audit_events` rows for both catalog mutation operations, and
 4. Docker absence still reports as infrastructure gating rather than a product regression.
 
-`bash scripts/verify-milestone.sh` is the canonical milestone-level wrapper. It fails fast when Docker is unavailable so infrastructure gating is reported distinctly, prints a compose service snapshot, then runs the tracked S02 and S03 proofs in sequence without reimplementing their checks.
+`bash scripts/verify-s06.sh` is the canonical M002 end-to-end assembly proof. It preserves the same Docker-unavailable infrastructure-gating branch while additionally proving that:
 
-The milestone wrapper proves the real compose-backed auth and audit flow. It does **not** replace the faster host-side `quality-gates` checks, and `quality-gates` does **not** claim Docker, compose health, cookie-session integration, or PostgreSQL audit persistence proof.
+1. the verifier can authenticate through the real backend cookie seam,
+2. a dedicated catalog user, team membership, direct role assignment, and team-scoped resource can be created in one compose-backed run,
+3. `/api/v1/catalog/users/{id}/relationship` reads back the assembled membership, assignment, and scoped resource graph together, and
+4. PostgreSQL contains the matching durable `audit_events` rows for the audited team, membership, and resource mutations keyed by correlation id.
+
+`bash scripts/verify-milestone.sh` is the milestone-level compose-backed wrapper. It fails fast when Docker is unavailable so infrastructure gating is reported distinctly, prints a compose service snapshot, then runs the tracked proof stages without reimplementing their checks.
+
+The milestone wrapper does **not** replace the faster host-side `quality-gates` checks, and `quality-gates` does **not** claim Docker, compose health, cookie-session integration, relationship aggregate readback, or PostgreSQL audit persistence proof.
 
 ## Repository roadmap context
 

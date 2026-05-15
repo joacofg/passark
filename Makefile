@@ -44,6 +44,9 @@ verify-s02:
 verify-s03:
 	bash scripts/verify-s03.sh
 
+verify-s06:
+	bash scripts/verify-s06.sh
+
 verify-milestone:
 	bash scripts/verify-milestone.sh
 
