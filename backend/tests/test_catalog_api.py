@@ -1323,6 +1323,203 @@ def test_app_project_environment_and_resource_failures_are_machine_readable(clie
     }
 
 
+def test_catalog_assembled_flow_pins_relationship_and_audit_contract(client, db_session):
+    login_as_admin(client)
+    correlation_family = "assembled-s06"
+
+    organization_response = client.get("/api/v1/catalog/organization")
+    assert organization_response.status_code == 200
+    organization = organization_response.json()
+
+    user_response = client.post(
+        "/api/v1/catalog/users",
+        json={
+            "email": "assembled.operator@example.com",
+            "full_name": "Assembled Operator",
+            "job_title": "Assembly verifier",
+            "is_active": True,
+        },
+    )
+    assert user_response.status_code == 201
+    catalog_user = user_response.json()["catalog_user"]
+
+    team_response = client.post(
+        "/api/v1/catalog/teams",
+        json={"name": "Assembly Team", "description": "Owns assembled proof resources"},
+        headers={
+            "x-correlation-id": f"{correlation_family}-team",
+            "x-request-id": f"{correlation_family}-team-request",
+            "user-agent": "pytest-catalog-assembled",
+        },
+    )
+    assert team_response.status_code == 201
+    team_body = team_response.json()
+    team = team_body["team"]
+
+    role_response = client.post(
+        "/api/v1/catalog/roles",
+        json={
+            "name": "Assembly Maintainer",
+            "description": "Maintains assembled resources",
+            "scope_type": "team",
+            "scope_id": team["id"],
+        },
+    )
+    assert role_response.status_code == 201
+    scoped_role = role_response.json()["scoped_role"]
+
+    membership_response = client.post(
+        "/api/v1/catalog/memberships",
+        json={"team_id": team["id"], "catalog_user_id": catalog_user["id"]},
+        headers={
+            "x-correlation-id": f"{correlation_family}-membership",
+            "x-request-id": f"{correlation_family}-membership-request",
+            "user-agent": "pytest-catalog-assembled",
+        },
+    )
+    assert membership_response.status_code == 201
+    membership_body = membership_response.json()
+    membership = membership_body["membership"]
+
+    assignment_response = client.post(
+        "/api/v1/catalog/assignments",
+        json={"scoped_role_id": scoped_role["id"], "catalog_user_id": catalog_user["id"]},
+    )
+    assert assignment_response.status_code == 201
+    assignment = assignment_response.json()["assignment"]
+
+    app_response = client.post(
+        "/api/v1/catalog/apps",
+        json={"name": "Assembly App", "description": "Assembled flow app"},
+    )
+    assert app_response.status_code == 201
+    app = app_response.json()["app"]
+
+    project_response = client.post(
+        "/api/v1/catalog/projects",
+        json={"app_id": app["id"], "name": "Assembly Project", "description": "Assembled flow project"},
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()["project"]
+
+    environment_response = client.post(
+        "/api/v1/catalog/environments",
+        json={
+            "project_id": project["id"],
+            "name": "Assembly Production",
+            "description": "Assembled flow environment",
+        },
+    )
+    assert environment_response.status_code == 201
+    environment = environment_response.json()["environment"]
+
+    resource_response = client.post(
+        "/api/v1/catalog/resources",
+        json={
+            "name": "Assembly Queue",
+            "resource_type": "queue",
+            "container_type": "environment",
+            "container_id": environment["id"],
+            "scope_type": "team",
+            "scope_id": team["id"],
+            "description": "Team-visible assembled queue",
+            "metadata": {"owner": "platform", "rotation": "manual", "verifier": "s06"},
+        },
+        headers={
+            "x-correlation-id": f"{correlation_family}-resource",
+            "x-request-id": f"{correlation_family}-resource-request",
+            "user-agent": "pytest-catalog-assembled",
+        },
+    )
+    assert resource_response.status_code == 201
+    resource_body = resource_response.json()
+    resource = resource_body["resource"]
+
+    unrelated_team = Team(
+        id="team_unrelated",
+        organization_id=organization["id"],
+        name="Unrelated Team",
+        description="Should stay hidden from the assembled aggregate",
+    )
+    unrelated_resource = Resource(
+        id="res_unrelated",
+        organization_id=organization["id"],
+        app_id=app["id"],
+        project_id=project["id"],
+        environment_id=environment["id"],
+        name="Unrelated Bucket",
+        resource_type="bucket",
+        container_type="environment",
+        container_id=environment["id"],
+        scope_type="team",
+        scope_id=unrelated_team.id,
+        description="Other team asset",
+        metadata_json={"tier": "private"},
+    )
+    db_session.add_all([unrelated_team, unrelated_resource])
+    db_session.commit()
+
+    relationship_response = client.get(f"/api/v1/catalog/users/{catalog_user['id']}/relationship")
+
+    assert relationship_response.status_code == 200
+    relationship = relationship_response.json()["item"]
+    assert relationship["catalog_user"]["id"] == catalog_user["id"]
+    assert relationship["memberships"] == [
+        {
+            "membership": membership,
+            "team": team,
+        }
+    ]
+    assert relationship["assignments"] == [
+        {
+            "assignment": assignment,
+            "scoped_role": scoped_role,
+        }
+    ]
+    assert any(
+        item["resource"]["id"] == resource["id"]
+        and item["resource"]["scope_type"] == "team"
+        and item["resource"]["scope_id"] == team["id"]
+        and item["app"]["id"] == app["id"]
+        and item["project"]["id"] == project["id"]
+        and item["environment"]["id"] == environment["id"]
+        for item in relationship["resources"]
+    )
+    assert all(item["resource"]["id"] != unrelated_resource.id for item in relationship["resources"])
+
+    team_audit_event = db_session.query(AuditEvent).filter_by(id=team_body["audit_event_id"]).one()
+    membership_audit_event = db_session.query(AuditEvent).filter_by(id=membership_body["audit_event_id"]).one()
+    resource_audit_event = db_session.query(AuditEvent).filter_by(id=resource_body["audit_event_id"]).one()
+
+    assert team_body["correlation_id"] == f"{correlation_family}-team"
+    assert membership_body["correlation_id"] == f"{correlation_family}-membership"
+    assert resource_body["correlation_id"] == f"{correlation_family}-resource"
+
+    assert team_audit_event.operation == "catalog_team_mutation"
+    assert team_audit_event.outcome == "sensitive_operation_allowed"
+    assert team_audit_event.reason_code == "sensitive_operation_allowed"
+    assert team_audit_event.correlation_id == f"{correlation_family}-team"
+    assert team_audit_event.request_id == f"{correlation_family}-team-request"
+    assert team_audit_event.metadata_json["team_id"] == team["id"]
+
+    assert membership_audit_event.operation == "catalog_membership_mutation"
+    assert membership_audit_event.outcome == "sensitive_operation_allowed"
+    assert membership_audit_event.reason_code == "sensitive_operation_allowed"
+    assert membership_audit_event.correlation_id == f"{correlation_family}-membership"
+    assert membership_audit_event.request_id == f"{correlation_family}-membership-request"
+    assert membership_audit_event.metadata_json["team_id"] == team["id"]
+    assert membership_audit_event.metadata_json["catalog_user_id"] == catalog_user["id"]
+
+    assert resource_audit_event.operation == "catalog_resource_mutation"
+    assert resource_audit_event.outcome == "sensitive_operation_allowed"
+    assert resource_audit_event.reason_code == "sensitive_operation_allowed"
+    assert resource_audit_event.correlation_id == f"{correlation_family}-resource"
+    assert resource_audit_event.request_id == f"{correlation_family}-resource-request"
+    assert resource_audit_event.metadata_json["resource_id"] == resource["id"]
+    assert resource_audit_event.metadata_json["scope_type"] == "team"
+    assert resource_audit_event.metadata_json["scope_id"] == team["id"]
+
+
 def test_audited_catalog_mutations_fail_closed_when_audit_write_fails(client, db_session, monkeypatch):
     login_as_admin(client)
     organization = Organization(

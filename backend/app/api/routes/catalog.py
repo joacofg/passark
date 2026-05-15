@@ -619,6 +619,16 @@ def _audited_response_kwargs(context: SensitiveOperationContext) -> dict[str, in
     }
 
 
+def _merge_audit_metadata(context: SensitiveOperationContext, db: OrmSession, metadata: dict[str, str]) -> None:
+    context.audit_event.metadata_json = {
+        **(context.audit_event.metadata_json or {}),
+        **metadata,
+    }
+    db.add(context.audit_event)
+    db.commit()
+    db.refresh(context.audit_event)
+
+
 def _serialize_catalog_user_relationship_membership(
     membership: TeamMembership,
     team: Team,
@@ -1086,6 +1096,14 @@ def create_team(
         db.rollback()
         _raise_duplicate_team()
     db.refresh(team)
+    _merge_audit_metadata(
+        context,
+        db,
+        {
+            "team_id": team.id,
+            "organization_id": organization.id,
+        },
+    )
     return AuditedTeamMutationResponse(team=_serialize_team(team), **_audited_response_kwargs(context))
 
 
@@ -1175,6 +1193,15 @@ def create_team_membership(
         db.rollback()
         _raise_duplicate_team_membership()
     db.refresh(membership)
+    _merge_audit_metadata(
+        context,
+        db,
+        {
+            "team_id": team.id,
+            "catalog_user_id": catalog_user.id,
+            "membership_id": membership.id,
+        },
+    )
     return AuditedTeamMembershipMutationResponse(
         membership=_serialize_team_membership(membership),
         **_audited_response_kwargs(context),
@@ -1410,4 +1437,15 @@ def create_resource(
         db.rollback()
         _raise_duplicate_resource()
     db.refresh(resource)
+    _merge_audit_metadata(
+        context,
+        db,
+        {
+            "resource_id": resource.id,
+            "scope_type": resource.scope_type,
+            "scope_id": resource.scope_id,
+            "container_type": resource.container_type,
+            "container_id": resource.container_id,
+        },
+    )
     return AuditedResourceMutationResponse(resource=_serialize_resource(resource), **_audited_response_kwargs(context))
