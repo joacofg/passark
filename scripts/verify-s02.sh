@@ -49,6 +49,8 @@ MEMBERSHIP_CREATE_BODY=""
 ASSIGNMENT_CREATE_HEADERS=""
 ASSIGNMENT_CREATE_BODY=""
 USERS_BODY=""
+USER_CREATE_HEADERS=""
+USER_CREATE_BODY=""
 
 cleanup() {
   rm -f \
@@ -67,7 +69,9 @@ cleanup() {
     "$MEMBERSHIP_CREATE_BODY" \
     "$ASSIGNMENT_CREATE_HEADERS" \
     "$ASSIGNMENT_CREATE_BODY" \
-    "$USERS_BODY"
+    "$USERS_BODY" \
+    "$USER_CREATE_HEADERS" \
+    "$USER_CREATE_BODY"
   if [[ "$TEMP_ENV_CREATED" -eq 1 ]]; then
     rm -f .env
   fi
@@ -169,9 +173,13 @@ MEMBERSHIP_CREATE_BODY="$(mktemp)"
 ASSIGNMENT_CREATE_HEADERS="$(mktemp)"
 ASSIGNMENT_CREATE_BODY="$(mktemp)"
 USERS_BODY="$(mktemp)"
+USER_CREATE_HEADERS="$(mktemp)"
+USER_CREATE_BODY="$(mktemp)"
 CORRELATION_ID="verify-s02-$(date +%s)"
 TEAM_NAME="Security ${CORRELATION_ID}"
 ROLE_NAME="Security Admin ${CORRELATION_ID}"
+USER_EMAIL="${CORRELATION_ID}@passark.local"
+USER_FULL_NAME="S02 Verifier ${CORRELATION_ID}"
 
 
 echo "==> Logging in with bootstrap operator"
@@ -201,26 +209,62 @@ if [[ "$login_status" != "200" ]]; then
 fi
 
 
-echo "==> Listing existing catalog users"
+echo "==> Creating a dedicated catalog user for relationship verification"
+user_payload="$(USER_EMAIL="$USER_EMAIL" USER_FULL_NAME="$USER_FULL_NAME" python3 - <<'PY'
+import json
+import os
+print(json.dumps({
+    "email": os.environ["USER_EMAIL"],
+    "full_name": os.environ["USER_FULL_NAME"],
+    "job_title": "S02 verifier",
+    "is_active": True,
+}))
+PY
+)"
+curl --silent --show-error \
+  --cookie "$COOKIE_JAR" \
+  --output "$USER_CREATE_BODY" \
+  --dump-header "$USER_CREATE_HEADERS" \
+  --header 'Content-Type: application/json' \
+  --data "$user_payload" \
+  "${backend_url}/catalog/users"
+user_status="$(awk 'toupper($1) ~ /^HTTP\// {code=$2} END {print code}' "$USER_CREATE_HEADERS")"
+if [[ "$user_status" != "201" ]]; then
+  echo "Expected catalog user create to succeed; got ${user_status:-unknown}." >&2
+  cat "$USER_CREATE_HEADERS" >&2
+  cat "$USER_CREATE_BODY" >&2
+  print_service_logs
+  exit 1
+fi
+CATALOG_USER_ID="$(python3 - "$USER_CREATE_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["catalog_user"]["id"])
+PY
+)"
+
+
+echo "==> Listing catalog users after bootstrap create"
 curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/users" > "$USERS_BODY"
-CATALOG_USER_ID="$(python3 - "$USERS_BODY" <<'PY'
+python3 - "$USERS_BODY" "$CATALOG_USER_ID" <<'PY'
 import json
 import sys
 from pathlib import Path
 payload = json.loads(Path(sys.argv[1]).read_text())
 items = payload.get("items", [])
-if not items:
-    raise SystemExit("No catalog users exist; create one via the operator workspace before running verify-s02.")
-print(items[0]["id"])
+expected_id = sys.argv[2]
+assert any(item["id"] == expected_id for item in items), items
 PY
-)"
 
 
 echo "==> Creating a team through the protected catalog API"
-team_payload="$(python3 - <<PY
+team_payload="$(TEAM_NAME="$TEAM_NAME" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": ${TEAM_NAME@Q},
+    "name": os.environ["TEAM_NAME"],
     "description": "Verification team created by verify-s02",
 }))
 PY
@@ -251,13 +295,14 @@ PY
 
 
 echo "==> Creating a team-scoped role through the protected catalog API"
-role_payload="$(python3 - <<PY
+role_payload="$(ROLE_NAME="$ROLE_NAME" TEAM_ID="$TEAM_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": ${ROLE_NAME@Q},
+    "name": os.environ["ROLE_NAME"],
     "description": "Verification role created by verify-s02",
     "scope_type": "team",
-    "scope_id": ${TEAM_ID@Q},
+    "scope_id": os.environ["TEAM_ID"],
 }))
 PY
 )"
@@ -287,11 +332,12 @@ PY
 
 
 echo "==> Creating a team membership through the protected catalog API"
-membership_payload="$(python3 - <<PY
+membership_payload="$(TEAM_ID="$TEAM_ID" CATALOG_USER_ID="$CATALOG_USER_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "team_id": ${TEAM_ID@Q},
-    "catalog_user_id": ${CATALOG_USER_ID@Q},
+    "team_id": os.environ["TEAM_ID"],
+    "catalog_user_id": os.environ["CATALOG_USER_ID"],
 }))
 PY
 )"
@@ -313,11 +359,12 @@ fi
 
 
 echo "==> Creating a direct role assignment through the protected catalog API"
-assignment_payload="$(python3 - <<PY
+assignment_payload="$(ROLE_ID="$ROLE_ID" CATALOG_USER_ID="$CATALOG_USER_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "scoped_role_id": ${ROLE_ID@Q},
-    "catalog_user_id": ${CATALOG_USER_ID@Q},
+    "scoped_role_id": os.environ["ROLE_ID"],
+    "catalog_user_id": os.environ["CATALOG_USER_ID"],
 }))
 PY
 )"

@@ -35,6 +35,7 @@ fi
 COOKIE_JAR=""
 LOGIN_HEADERS=""
 LOGIN_BODY=""
+ORG_BODY=""
 USERS_BODY=""
 APPS_BODY=""
 PROJECTS_BODY=""
@@ -60,6 +61,7 @@ cleanup() {
     "$COOKIE_JAR" \
     "$LOGIN_HEADERS" \
     "$LOGIN_BODY" \
+    "$ORG_BODY" \
     "$USERS_BODY" \
     "$APPS_BODY" \
     "$PROJECTS_BODY" \
@@ -167,6 +169,7 @@ backend_url="http://127.0.0.1:${BACKEND_PORT:-8000}/api/v1"
 COOKIE_JAR="$(mktemp)"
 LOGIN_HEADERS="$(mktemp)"
 LOGIN_BODY="$(mktemp)"
+ORG_BODY="$(mktemp)"
 USERS_BODY="$(mktemp)"
 APPS_BODY="$(mktemp)"
 PROJECTS_BODY="$(mktemp)"
@@ -218,6 +221,17 @@ if [[ "$login_status" != "200" ]]; then
   exit 1
 fi
 
+echo "==> Reading organization root for scoped resource checks"
+curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/organization" > "$ORG_BODY"
+ORGANIZATION_ID="$(python3 - "$ORG_BODY" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+print(payload["id"])
+PY
+)"
+
 echo "==> Listing catalog users for downstream scope checks"
 curl --fail --silent --show-error --cookie "$COOKIE_JAR" "${backend_url}/catalog/users" > "$USERS_BODY"
 CATALOG_USER_ID="$(python3 - "$USERS_BODY" <<'PY'
@@ -233,10 +247,11 @@ PY
 )"
 
 echo "==> Creating an application"
-app_payload="$(python3 - <<PY
+app_payload="$(APP_NAME="$APP_NAME" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": ${APP_NAME@Q},
+    "name": os.environ["APP_NAME"],
     "description": "Verification application created by verify-s03",
 }))
 PY
@@ -266,11 +281,12 @@ PY
 )"
 
 echo "==> Creating a project under the new application"
-project_payload="$(python3 - <<PY
+project_payload="$(APP_ID="$APP_ID" PROJECT_NAME="$PROJECT_NAME" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "app_id": ${APP_ID@Q},
-    "name": ${PROJECT_NAME@Q},
+    "app_id": os.environ["APP_ID"],
+    "name": os.environ["PROJECT_NAME"],
     "description": "Verification project created by verify-s03",
 }))
 PY
@@ -300,11 +316,12 @@ PY
 )"
 
 echo "==> Creating an environment under the new project"
-environment_payload="$(python3 - <<PY
+environment_payload="$(PROJECT_ID="$PROJECT_ID" ENVIRONMENT_NAME="$ENVIRONMENT_NAME" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "project_id": ${PROJECT_ID@Q},
-    "name": ${ENVIRONMENT_NAME@Q},
+    "project_id": os.environ["PROJECT_ID"],
+    "name": os.environ["ENVIRONMENT_NAME"],
     "description": "Verification environment created by verify-s03",
 }))
 PY
@@ -334,15 +351,16 @@ PY
 )"
 
 echo "==> Creating a typed resource with descriptive metadata only"
-resource_payload="$(python3 - <<PY
+resource_payload="$(RESOURCE_NAME="$RESOURCE_NAME" ENVIRONMENT_ID="$ENVIRONMENT_ID" ORGANIZATION_ID="$ORGANIZATION_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": ${RESOURCE_NAME@Q},
+    "name": os.environ["RESOURCE_NAME"],
     "resource_type": "queue",
     "container_type": "environment",
-    "container_id": ${ENVIRONMENT_ID@Q},
+    "container_id": os.environ["ENVIRONMENT_ID"],
     "scope_type": "organization",
-    "scope_id": "org_123",
+    "scope_id": os.environ["ORGANIZATION_ID"],
     "description": "Verification resource created by verify-s03",
     "metadata": {
         "owner": "platform",
@@ -425,15 +443,16 @@ fi
 printf '%s' "$(cat "$MISSING_PROJECT_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "project_not_found"'
 
 echo "==> Verifying scope-mismatch failures stay machine-readable"
-scope_mismatch_payload="$(python3 - <<PY
+scope_mismatch_payload="$(ENVIRONMENT_ID="$ENVIRONMENT_ID" CATALOG_USER_ID="$CATALOG_USER_ID" CORRELATION_ID="$CORRELATION_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": "Scope mismatch ${CORRELATION_ID}",
+    "name": f"Scope mismatch {os.environ['CORRELATION_ID']}",
     "resource_type": "queue",
     "container_type": "environment",
-    "container_id": ${ENVIRONMENT_ID@Q},
+    "container_id": os.environ["ENVIRONMENT_ID"],
     "scope_type": "team",
-    "scope_id": ${CATALOG_USER_ID@Q},
+    "scope_id": os.environ["CATALOG_USER_ID"],
     "description": "Should fail",
     "metadata": {"owner": "platform"}
 }))
@@ -454,18 +473,19 @@ if [[ "$scope_mismatch_status" != "422" ]]; then
   print_service_logs
   exit 1
 fi
-printf '%s' "$(cat "$SCOPE_MISMATCH_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "resource_scope_mismatch"'
+printf '%s' "$(cat "$SCOPE_MISMATCH_BODY")" | python3 -c 'import json,sys; payload=json.load(sys.stdin); assert payload["detail"]["code"] == "scoped_role_scope_mismatch"'
 
 echo "==> Verifying secret-payload rejection stays machine-readable"
-secret_forbidden_payload="$(python3 - <<PY
+secret_forbidden_payload="$(ENVIRONMENT_ID="$ENVIRONMENT_ID" CORRELATION_ID="$CORRELATION_ID" ORGANIZATION_ID="$ORGANIZATION_ID" python3 - <<'PY'
 import json
+import os
 print(json.dumps({
-    "name": "Forbidden secret ${CORRELATION_ID}",
+    "name": f"Forbidden secret {os.environ['CORRELATION_ID']}",
     "resource_type": "queue",
     "container_type": "environment",
-    "container_id": ${ENVIRONMENT_ID@Q},
+    "container_id": os.environ["ENVIRONMENT_ID"],
     "scope_type": "organization",
-    "scope_id": "org_123",
+    "scope_id": os.environ["ORGANIZATION_ID"],
     "description": "Should fail",
     "metadata": {"password": "super-secret"}
 }))

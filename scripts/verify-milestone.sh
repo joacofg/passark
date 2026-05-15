@@ -61,6 +61,9 @@ run_stage() {
 echo "==> Starting milestone integration verification"
 echo "==> Docker availability is a hard prerequisite; daemon failures are infrastructure gating, not auth or app regressions."
 
+echo "==> Starting compose stack for milestone verification"
+docker compose up --build -d
+
 echo "==> Compose service snapshot"
 docker compose ps || true
 

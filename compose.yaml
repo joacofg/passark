@@ -28,6 +28,7 @@ services:
       - -c
       - |
         pip install --no-cache-dir -e .[dev] && \
+        python -c "from os import environ; from sqlalchemy import create_engine, text; engine = create_engine(environ['DATABASE_URL']); conn = engine.connect(); table_exists = conn.execute(text(\"SELECT to_regclass('public.alembic_version')\")).scalar() if conn.dialect.name == 'postgresql' else None; current_length = conn.execute(text(\"SELECT character_maximum_length FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'alembic_version' AND column_name = 'version_num'\")).scalar() if table_exists else None; conn.execute(text(\"ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(128)\")) if current_length is not None and int(current_length) < 128 else None; conn.commit() if current_length is not None and int(current_length) < 128 else None; conn.close()" && \
         alembic upgrade head && \
         uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}
     env_file:
@@ -67,8 +68,11 @@ services:
       - sh
       - -c
       - |
-        npm install && \
-        npm run dev
+        if [ -d node_modules ]; then \
+          npm run dev; \
+        else \
+          npm install && npm run dev; \
+        fi
     env_file:
       - .env
     environment:

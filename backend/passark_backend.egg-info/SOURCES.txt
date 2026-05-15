@@ -7,5 +7,6 @@ passark_backend.egg-info/dependency_links.txt
 passark_backend.egg-info/requires.txt
 passark_backend.egg-info/top_level.txt
 tests/test_auth.py
+tests/test_catalog_api.py
 tests/test_config.py
 tests/test_health.py
