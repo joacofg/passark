@@ -2,6 +2,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 
 import HomePage from "../app/page";
+import { AuthApiRequestError } from "../lib/auth";
 
 vi.mock("../lib/auth", async () => {
   const actual = await vi.importActual<typeof import("../lib/auth")>("../lib/auth");
@@ -25,7 +26,11 @@ describe("HomePage", () => {
   it("renders the login-first shell when no backend session exists", async () => {
     readServerSessionMock.mockResolvedValueOnce({
       status: "unauthenticated",
-      error: new Error("Authentication required."),
+      error: new AuthApiRequestError(
+        401,
+        "Authentication required.",
+        "auth_unauthenticated",
+      ),
     });
 
     render(await HomePage());

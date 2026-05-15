@@ -133,8 +133,8 @@ export async function readServerSession(): Promise<SessionReadResult> {
     );
 
     return { status: "authenticated", session };
-  } catch (error) {
-    if (isUnauthenticatedError(error)) {
+  } catch (error: unknown) {
+    if (error instanceof AuthApiRequestError && isUnauthenticatedError(error)) {
       return { status: "unauthenticated", error };
     }
 
